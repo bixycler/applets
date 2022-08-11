@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Screen capturing tools</title>
+</head>
+
+<body>
+  <table>
+    <tr>
+      <td>
+        <canvas id='canvas' style="background: gray; padding: 10px;"></canvas>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <input type="button" id="ssanimation" value="⏹️ Stop"><br><!--▶️ Start-->
+        <input type="button" id="ssrecording" value="🔴 Record"><!--🟥 Stop recording-->
+        <select id="target">
+          <option value="canvas" selected>Canvas</option>
+          <option value="screen">Screen</option>
+          <option value="camera">Camera</option>
+        </select><br>
+      </td>
+    </tr>
+  </table>
+  <p id="capturedVideo">Captured video:<br>
+    <video id="preview" playsinline autoplay controls></video>
+  </p>
+  <p id="capturedImg" style="display: none;">Captured PNG image:<br>
+    <img id="png" style="background: lightgray; padding: 10px;"></img>
+  </p>
+  <a id="recordedFile" style="display: none;"></a>
+
+  <script>
+    let context, x,y,dx,dy, W=50,H=30, colors=[];
+    let utms, tms=0, ts=0, animating;
+    let stream, recorder, vidchunks=[];
+    function recorderStopped(e){
+      target.disabled = false;
+      let blob = new Blob(vidchunks, {'type': 'video/mp4'}); // 'video/webm' 
+      vidchunks = [];
+      let videoURL = URL.createObjectURL(blob);
+      recordedFile.href = videoURL;
+      recordedFile.download = 'screen-capture-record.mp4';
+      recordedFile.click();
+      URL.revokeObjectURL(videoURL);
+      console.log('Recorded video: '+videoURL);
+    }
+    async function setupRecorder(){
+      if(target.value=='canvas'){ 
+        stream = canvas.captureStream(30);
+        capturedImg.style.display = 'block';
+      }else{ capturedImg.style.display = 'none';}
+      if(target.value=='screen'){ 
+        try{ stream = await navigator.mediaDevices.getDisplayMedia({audio: true, video: true});
+        } catch (e) { alert('getDisplayMedia():'+e); return; }
+      }
+      if(target.value=='camera'){ 
+        try{ stream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+        } catch (e) { alert('getUserMedia(): '+e); return; }
+      }
+      preview.srcObject = stream;
+      console.log(stream.getVideoTracks()[0]);
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = function(e){ vidchunks.push(e.data); };
+      recorder.onstart = function(e){ target.disabled = true; }
+      recorder.onstop = recorderStopped;
+    }
+    async function init() { // Set up everything
+      utms = Date.now(); animating = true;
+      context = canvas.getContext("2d");
+      x = y = 10; dx = dy = 1;
+      colors = ['red','green','blue','yellow','cyan','magenta'];
+      setupRecorder();
+    }
+    ssanimation.onclick = function (e) {
+      if (animating) { //stop now
+        ssanimation.value = '▶️ Start';
+        animating = false;
+      } else { //start now
+        ssanimation.value = '⏹️ Stop';
+        animating = true; utms = Date.now(); animate();
+      }
+    }
+    target.onchange = function(e){ setupRecorder(); }
+    function startRecording(){
+      if(recorder.state == 'recording'){ return }
+      recorder.start();
+      ssrecording.value = '🟥 Stop recording';
+    }    
+    function stopRecording(){
+      if(recorder.state == 'inactive'){ return }
+      recorder.stop();
+      ssrecording.value = '🔴 Record';
+    }    
+    ssrecording.onclick = function (e) {
+      if(recorder.state == 'recording'){ stopRecording(); }else{ startRecording(); }
+    }
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }    
+    async function animate() {
+      if(!animating){ return }
+      if(false){ await sleep(100); }
+      let dt = Date.now() - utms; tms += dt; utms = Date.now();
+      if((tms > 1000)){ 
+        //console.log('t:'+ts+'s +'+dt+'('+((tms-1000)/1000.0)+')');
+        ts++; tms = 0;
+      }
+      x += dx*dt/10.0; 
+      if(x+W > canvas.width-10){ dx = -1; }
+      if(x < 10){ dx = +1; }
+      y += dy*dt/10.0;
+      if(y+H > canvas.height-10){ dy = -1; }
+      if(y < 10){ dy = +1; }
+      context.fillStyle = colors[ts%colors.length]
+      context.fillRect(x, y, W, H);
+      png.src = canvas.toDataURL('image/png'); // captured as an png
+      requestAnimationFrame(animate);
+    }
+    init();
+    animate();
+
+</script>
+</body>
+
+</html>
