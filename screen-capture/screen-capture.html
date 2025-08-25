@@ -25,7 +25,7 @@
     </tr>
   </table>
   <p id="capturedVideo">Captured video:<br>
-    <video id="preview" playsinline autoplay controls></video>
+    <video id="preview" playsinline autoplay muted controls></video>
   </p>
   <p id="capturedImg" style="display: none;">Captured PNG image:<br>
     <img id="png" style="background: lightgray; padding: 10px;"></img>
@@ -38,31 +38,37 @@
     let stream, recorder, vidchunks=[];
     function recorderStopped(e){
       target.disabled = false;
-      let blob = new Blob(vidchunks, {'type': 'video/mp4'}); // 'video/webm' 
+      let blob = new Blob(vidchunks, {'type': 'video/webm'});
       vidchunks = [];
       let videoURL = URL.createObjectURL(blob);
       recordedFile.href = videoURL;
-      recordedFile.download = 'screen-capture-record.mp4';
+      recordedFile.download = 'screen-capture-record.webm';
       recordedFile.click();
-      URL.revokeObjectURL(videoURL);
       console.log('Recorded video: '+videoURL);
+      URL.revokeObjectURL(videoURL); // Don't litter the memory!
     }
     async function setupRecorder(){
-      if(target.value=='canvas'){ 
+      if(target.value=='canvas'){
         stream = canvas.captureStream(30);
         capturedImg.style.display = 'block';
       }else{ capturedImg.style.display = 'none';}
-      if(target.value=='screen'){ 
+      if(target.value=='screen'){
         try{ stream = await navigator.mediaDevices.getDisplayMedia({audio: true, video: true});
         } catch (e) { alert('getDisplayMedia():'+e); return; }
       }
-      if(target.value=='camera'){ 
+      if(target.value=='camera'){
         try{ stream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
         } catch (e) { alert('getUserMedia(): '+e); return; }
       }
       preview.srcObject = stream;
       console.log(stream.getVideoTracks()[0]);
-      recorder = new MediaRecorder(stream);
+      const options = { mimeType: 'video/webm;codecs=vp9' };
+      // or fallback to vp8 if vp9 not supported
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options.mimeType = 'video/webm;codecs=vp8';
+      }
+      recorder = new MediaRecorder(stream, options);
+      console.log("Using recorder mimeType:", recorder.mimeType);
       recorder.ondataavailable = function(e){ vidchunks.push(e.data); };
       recorder.onstart = function(e){ target.disabled = true; }
       recorder.onstop = recorderStopped;
@@ -88,27 +94,27 @@
       if(recorder.state == 'recording'){ return }
       recorder.start();
       ssrecording.value = '🟥 Stop recording';
-    }    
+    }
     function stopRecording(){
       if(recorder.state == 'inactive'){ return }
       recorder.stop();
       ssrecording.value = '🔴 Record';
-    }    
+    }
     ssrecording.onclick = function (e) {
       if(recorder.state == 'recording'){ stopRecording(); }else{ startRecording(); }
     }
     function sleep(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
-    }    
+    }
     async function animate() {
       if(!animating){ return }
       if(false){ await sleep(100); }
       let dt = Date.now() - utms; tms += dt; utms = Date.now();
-      if((tms > 1000)){ 
+      if((tms > 1000)){
         //console.log('t:'+ts+'s +'+dt+'('+((tms-1000)/1000.0)+')');
         ts++; tms = 0;
       }
-      x += dx*dt/10.0; 
+      x += dx*dt/10.0;
       if(x+W > canvas.width-10){ dx = -1; }
       if(x < 10){ dx = +1; }
       y += dy*dt/10.0;
