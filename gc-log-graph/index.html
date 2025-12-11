@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G1GC Log Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>G1GC Log Visualizer</h1>
+            <p>Upload a Java G1GC log file (Java 9+ Unified Logging) to visualize heap usage.</p>
+        </header>
+
+        <div class="controls">
+            <input type="file" id="log-input" accept=".log,.txt" />
+            <div id="status" style="margin-left: 10px; color: #888;">Waiting for file...</div>
+            <label style="margin-left: 20px;">
+                Graph Type:
+                <select id="graph-type" style="margin-left: 5px;">
+                    <option value="area" selected>Area</option>
+                    <option value="line">Line</option>
+                </select>
+            </label>
+            <label style="margin-left: 20px;">
+                Timezone:
+                <select id="timezone-select" style="margin-left: 5px;">
+                    <option value="local">Local</option>
+                </select>
+            </label>
+            <label style="margin-left: 20px; cursor: pointer;">
+                <input type="checkbox" id="show-segments" style="margin-right: 5px;">
+                Show GC Drop
+            </label>
+            <button id="reset-zoom" style="margin-left: 20px; padding: 4px 12px; cursor: pointer;">Reset Zoom</button>
+        </div>
+
+        <div id="chart-container"></div>
+        <div id="tooltip" class="tooltip" style="opacity: 0;"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
