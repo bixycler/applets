@@ -53,6 +53,13 @@ const STYLES = {
         lineTotal: { stroke: '#333', strokeWidth: 1.5 },
         lineUsed: { stroke: '#000', strokeWidth: 1.5 },
     },
+    // Rate line styles
+    rates: {
+        allocRate: { stroke: '#ff7700', strokeWidth: 2, strokeDasharray: '' },       // Orange (longPause)
+        gcRate: { stroke: '#018036', strokeWidth: 2, strokeDasharray: '' },          // Green (shortPause)
+        meanAllocRate: { stroke: '#ff7700', strokeWidth: 1.5, strokeDasharray: '5,5' },
+        meanGcRate: { stroke: '#018036', strokeWidth: 1.5, strokeDasharray: '5,5' },
+    },
 };
 
 let currentData = null;
@@ -65,6 +72,11 @@ document.getElementById('graph-type').addEventListener('change', () => {
     }
 });
 document.getElementById('show-segments').addEventListener('change', () => {
+    if (currentData) {
+        renderChart(currentData);
+    }
+});
+document.getElementById('show-rates').addEventListener('change', () => {
     if (currentData) {
         renderChart(currentData);
     }
@@ -128,7 +140,7 @@ function handleFileUpload(event) {
                 console.error(err);
                 statusDiv.textContent = 'Error parsing file: ' + err.message;
             }
-        }, 1000);
+        }, 100);
     };
     reader.readAsText(file);
 }
@@ -266,6 +278,60 @@ function parseGCLog(content) {
         }
     });
 
+    // ============ RATE CALCULATIONS ============
+    if (result.length > 1) {
+        const firstTime = result[0].timestamp.getTime();
+        const lastTime = result[result.length - 1].timestamp.getTime();
+        const totalTimeMs = lastTime - firstTime;
+        const meanIntervalMs = totalTimeMs / result.length;
+        const windowSize = 10;
+        const windowMs = windowSize * meanIntervalMs;
+        // Rate unit = GB/s = bytes/ms / Bms2GBs
+        const Bms2GBs = (1 << 30) / 1000;
+
+        let prevAfterBytes = result[0].beforeBytes; // Initial: assume heap was at first beforeBytes
+        let totalAllocated = 0;
+        let totalReclaimed = 0;
+
+        // Calculate per-event allocation and reclaim
+        result.forEach((r, i) => {
+            r.allocatedBytes = Math.max(0, r.beforeBytes - prevAfterBytes);
+            r.reclaimedBytes = Math.max(0, r.beforeBytes - r.afterBytes);
+            totalAllocated += r.allocatedBytes;
+            totalReclaimed += r.reclaimedBytes;
+            prevAfterBytes = r.afterBytes;
+            r.elapsedMs = r.timestamp.getTime() - firstTime;
+
+            // Calculate instant rates from previous events in the window
+            let windowAllocated = r.allocatedBytes;
+            let windowReclaimed = r.reclaimedBytes;
+            let spanStart = r.elapsedMs;
+            for (let j = i - 1; j > Math.max(-1, i - windowSize); j--) {
+                windowAllocated += result[j].allocatedBytes;
+                windowReclaimed += result[j].reclaimedBytes;
+                spanStart = result[j].elapsedMs;
+            }
+            // Use actual time span if we have enough events, otherwise use total time to avoid artificial spikes
+            let span = i < windowSize ? totalTimeMs : r.elapsedMs - spanStart;
+            r.instantAllocRate = (windowAllocated / span) / Bms2GBs;
+            r.instantGcRate = (windowReclaimed / span) / Bms2GBs;
+        });
+
+        // Mean rates 
+        const meanAllocRate = totalTimeMs > 0 ? (totalAllocated / totalTimeMs) / Bms2GBs : 0;
+        const meanGcRate = totalTimeMs > 0 ? (totalReclaimed / totalTimeMs) / Bms2GBs : 0;
+
+        // Attach stats to result
+        result.rateStats = {
+            meanAllocRate,
+            meanGcRate,
+            meanIntervalMs,
+            totalAllocated,
+            totalReclaimed,
+            totalTimeMs
+        };
+    }
+
     // Attach detected timezone to result
     result.detectedTimezone = detectedTimezone;
 
@@ -277,9 +343,9 @@ function parseSize(value, unit) {
     // Normalize unit: strip 'B' if present (e.g., "GB" -> "G", "M" stays "M")
     const normalizedUnit = unit.replace('B', '');
     switch (normalizedUnit) {
-        case 'G': return val * 1024 * 1024 * 1024;
-        case 'M': return val * 1024 * 1024;
-        case 'K': return val * 1024;
+        case 'G': return val * (1 << 30); // GB
+        case 'M': return val * (1 << 20); // MB
+        case 'K': return val * (1 << 10); // KB
         default: return val;
     }
 }
@@ -292,7 +358,7 @@ function renderChart(data) {
         return;
     }
 
-    const margin = { top: 20, right: 30, bottom: 50, left: 70 };
+    const margin = { top: 10, right: 60, bottom: 20, left: 50 };
     const width = chartContainer.clientWidth - margin.left - margin.right;
     const height = 600 - margin.top - margin.bottom;
 
@@ -318,24 +384,21 @@ function renderChart(data) {
 
     const xOriginal = x.copy(); // Store original scale for reset
 
-    // Memory Scale (Use Bytes internally, format to GB/MB on axis)
-    const maxMem = d3.max(data, d => Math.max(d.totalBytes, d.beforeBytes));
+    // Memory Scale in GB (so D3's .nice() gives nice GB values)
+    const GB = 1 << 30;
+    const toGB = bytes => bytes / GB;
+    const maxMemGB = d3.max(data, d => Math.max(toGB(d.totalBytes), toGB(d.beforeBytes)));
     const y = d3.scaleLinear()
-        .domain([0, maxMem * 1.1]) // 10% headroom
+        .domain([0, maxMemGB * 1.02]) // 2% headroom
+        .nice()
         .range([height, 0]);
 
     // --- Formatters ---
-    const memoryFormatter = (bytes) => {
-        if (bytes >= 1024 * 1024 * 100) { // >= 100 MB, show GB? 
-            // User rule: "convert to GB whenever the size >= 100MB"
-            // Wait, 100MB is small. If everything is GB, we show GB.
-            // Let's stick to: if value > 1GB, show GB. If > 1MB, show MB.
-            if (bytes >= 1024 * 1024 * 1024) {
-                return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-            }
-            return (bytes / (1024 * 1024)).toFixed(0) + " MB";
+    const memoryFormatter = (gb) => {
+        if (gb < 0.1) { // < 100 MB, show MB
+            return (gb * (1 << 10)).toFixed(1) + " MB";
         }
-        return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+        return gb.toFixed(1) + " GB";
     };
 
     const timeFormatter = d3.timeFormat("%H:%M:%S");
@@ -393,7 +456,7 @@ function renderChart(data) {
         const areaTotal = d3.area()
             .x(d => x(d.timestamp))
             .y0(height)
-            .y1(d => y(d.totalBytes));
+            .y1(d => y(toGB(d.totalBytes)));
 
         chartContent.append("path")
             .datum(data)
@@ -406,7 +469,7 @@ function renderChart(data) {
         const areaUsed = d3.area()
             .x(d => x(d.timestamp))
             .y0(height)
-            .y1(d => y(d.afterBytes));
+            .y1(d => y(toGB(d.afterBytes)));
 
         chartContent.append("path")
             .datum(data)
@@ -419,7 +482,7 @@ function renderChart(data) {
         // Line graph with black lines
         const lineTotal = d3.line()
             .x(d => x(d.timestamp))
-            .y(d => y(d.totalBytes));
+            .y(d => y(toGB(d.totalBytes)));
 
         chartContent.append("path")
             .datum(data)
@@ -431,7 +494,7 @@ function renderChart(data) {
 
         const lineUsed = d3.line()
             .x(d => x(d.timestamp))
-            .y(d => y(d.afterBytes));
+            .y(d => y(toGB(d.afterBytes)));
 
         chartContent.append("path")
             .datum(data)
@@ -440,6 +503,103 @@ function renderChart(data) {
             .attr("fill", "none")
             .attr("stroke", STYLES.graph.lineUsed.stroke)
             .attr("stroke-width", STYLES.graph.lineUsed.strokeWidth);
+    }
+
+    // --- Vertical Segments (Before -> After) ---
+    const showSegments = document.getElementById('show-segments').checked;
+    if (showSegments) {
+        chartContent.selectAll(".gc-segment")
+            .data(data)
+            .enter().append("line")
+            .attr("class", "gc-segment")
+            .attr("x1", d => x(d.timestamp))
+            .attr("x2", d => x(d.timestamp))
+            .attr("y1", d => y(toGB(d.beforeBytes)))
+            .attr("y2", d => y(toGB(d.afterBytes)))
+            .attr("stroke", d => d.color)
+            .attr("stroke-width", 1)
+            .attr("stroke-opacity", 0.6);
+    }
+
+    // --- Rate Visualization ---
+    const showRates = document.getElementById('show-rates').checked;
+    let yRate = null; // Declare at higher scope for zoom handler
+    if (showRates && data.rateStats) {
+        const stats = data.rateStats;
+
+        // Calculate max rate for Y scale
+        const maxRate = d3.max(data, d => Math.max(d.instantAllocRate || 0, d.instantGcRate || 0));
+
+        // Right Y-axis scale for rates (MB/s)
+        yRate = d3.scaleLinear()
+            .domain([0, maxRate * 1.02]) // 2% headroom
+            .range([height, 0]);
+
+        // Rate formatter
+        const rateFormatter = (rate) => {
+            if (rate < 0.1) {
+                return (rate * (1 << 10)).toFixed(1) + " MB/s";
+            }
+            return rate.toFixed(2) + " GB/s";
+        };
+
+        // Add right Y-axis
+        g.append("g")
+            .attr("class", "y-axis-right")
+            .attr("transform", `translate(${width}, 0)`)
+            .call(d3.axisRight(yRate).tickFormat(rateFormatter))
+            .selectAll("text")
+            .style("fill", "#666");
+
+        // Mean allocation rate (horizontal dashed line)
+        chartContent.append("line")
+            .attr("class", "mean-alloc-rate")
+            .attr("x1", 0)
+            .attr("x2", width)
+            .attr("y1", yRate(stats.meanAllocRate))
+            .attr("y2", yRate(stats.meanAllocRate))
+            .attr("stroke", STYLES.rates.meanAllocRate.stroke)
+            .attr("stroke-width", STYLES.rates.meanAllocRate.strokeWidth)
+            .attr("stroke-dasharray", STYLES.rates.meanAllocRate.strokeDasharray);
+
+        // Mean GC rate (horizontal dashed line)
+        chartContent.append("line")
+            .attr("class", "mean-gc-rate")
+            .attr("x1", 0)
+            .attr("x2", width)
+            .attr("y1", yRate(stats.meanGcRate))
+            .attr("y2", yRate(stats.meanGcRate))
+            .attr("stroke", STYLES.rates.meanGcRate.stroke)
+            .attr("stroke-width", STYLES.rates.meanGcRate.strokeWidth)
+            .attr("stroke-dasharray", STYLES.rates.meanGcRate.strokeDasharray);
+
+        // Instant allocation rate curve
+        const allocRateLine = d3.line()
+            .x(d => x(d.timestamp))
+            .y(d => yRate(d.instantAllocRate || 0))
+            .curve(d3.curveMonotoneX);
+
+        chartContent.append("path")
+            .datum(data)
+            .attr("class", "line alloc-rate-line")
+            .attr("d", allocRateLine)
+            .attr("fill", "none")
+            .attr("stroke", STYLES.rates.allocRate.stroke)
+            .attr("stroke-width", STYLES.rates.allocRate.strokeWidth);
+
+        // Instant GC rate curve
+        const gcRateLine = d3.line()
+            .x(d => x(d.timestamp))
+            .y(d => yRate(d.instantGcRate || 0))
+            .curve(d3.curveMonotoneX);
+
+        chartContent.append("path")
+            .datum(data)
+            .attr("class", "line gc-rate-line")
+            .attr("d", gcRateLine)
+            .attr("fill", "none")
+            .attr("stroke", STYLES.rates.gcRate.stroke)
+            .attr("stroke-width", STYLES.rates.gcRate.strokeWidth);
     }
 
     // --- Interactive Points ---
@@ -484,28 +644,13 @@ function renderChart(data) {
                 popup.style("display", "none");
             });
     }
-    // --- Vertical Segments (Before -> After) ---
-    const showSegments = document.getElementById('show-segments').checked;
-    if (showSegments) {
-        chartContent.selectAll(".gc-segment")
-            .data(data)
-            .enter().append("line")
-            .attr("class", "gc-segment")
-            .attr("x1", d => x(d.timestamp))
-            .attr("x2", d => x(d.timestamp))
-            .attr("y1", d => y(d.beforeBytes))
-            .attr("y2", d => y(d.afterBytes))
-            .attr("stroke", d => d.color)
-            .attr("stroke-width", 1)
-            .attr("stroke-opacity", 0.6);
-    }
 
     chartContent.selectAll(".dot")
         .data(data)
         .enter().append("circle")
         .attr("class", "dot")
         .attr("cx", d => x(d.timestamp))
-        .attr("cy", d => y(d.afterBytes))
+        .attr("cy", d => y(toGB(d.afterBytes)))
         .attr("r", d => d.radius)
         .attr("fill", d => d.color)
         .attr("stroke", "#fff")
@@ -618,21 +763,21 @@ Duration: ${d.duration}ms`;
                 .attr("d", d3.area()
                     .x(d => x(d.timestamp))
                     .y0(height)
-                    .y1(d => y(d.totalBytes)));
+                    .y1(d => y(toGB(d.totalBytes))));
             chartContent.select(".area-heap-used")
                 .attr("d", d3.area()
                     .x(d => x(d.timestamp))
                     .y0(height)
-                    .y1(d => y(d.afterBytes)));
+                    .y1(d => y(toGB(d.afterBytes))));
         } else {
             chartContent.select(".line-heap-total")
                 .attr("d", d3.line()
                     .x(d => x(d.timestamp))
-                    .y(d => y(d.totalBytes)));
+                    .y(d => y(toGB(d.totalBytes))));
             chartContent.select(".line-heap-used")
                 .attr("d", d3.line()
                     .x(d => x(d.timestamp))
-                    .y(d => y(d.afterBytes)));
+                    .y(d => y(toGB(d.afterBytes))));
         }
 
         // Update dots
@@ -643,6 +788,18 @@ Duration: ${d.duration}ms`;
         chartContent.selectAll(".gc-segment")
             .attr("x1", d => x(d.timestamp))
             .attr("x2", d => x(d.timestamp));
+
+        // Update rate lines if visible
+        chartContent.select(".alloc-rate-line")
+            .attr("d", d3.line()
+                .x(d => x(d.timestamp))
+                .y(d => yRate ? yRate(d.instantAllocRate || 0) : 0)
+                .curve(d3.curveMonotoneX));
+        chartContent.select(".gc-rate-line")
+            .attr("d", d3.line()
+                .x(d => x(d.timestamp))
+                .y(d => yRate ? yRate(d.instantGcRate || 0) : 0)
+                .curve(d3.curveMonotoneX));
     }
 
     // Reset zoom function
@@ -664,6 +821,14 @@ Duration: ${d.duration}ms`;
         { color: STYLES.colors.normalGC, label: "Normal GC", type: "circle", r: STYLES.radii.normalGC }
     ];
 
+    // Add rate legend items if showing rates
+    if (showRates && data.rateStats) {
+        legendItems.push(
+            { color: STYLES.rates.allocRate.stroke, label: "Alloc Rate", type: "line" },
+            { color: STYLES.rates.gcRate.stroke, label: "GC Rate", type: "line" }
+        );
+    }
+
     legendItems.forEach((item, i) => {
         if (item.type === "rect") {
             legend.append("rect")
@@ -672,6 +837,14 @@ Duration: ${d.duration}ms`;
                 .attr("width", 14)
                 .attr("height", 3)
                 .attr("fill", item.color);
+        } else if (item.type === "line") {
+            legend.append("line")
+                .attr("x1", 0)
+                .attr("x2", 14)
+                .attr("y1", i * 18 + 5)
+                .attr("y2", i * 18 + 5)
+                .attr("stroke", item.color)
+                .attr("stroke-width", 2);
         } else {
             legend.append("circle")
                 .attr("cx", 5)
@@ -692,8 +865,8 @@ Duration: ${d.duration}ms`;
 }
 
 function formatBytes(bytes) {
-    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(3) + " GB";
-    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    if (bytes >= 1 << 30) return (bytes / (1 << 30)).toFixed(3) + " GB";
+    if (bytes >= 1 << 20) return (bytes / (1 << 20)).toFixed(1) + " MB";
     return bytes + " B";
 }
 
