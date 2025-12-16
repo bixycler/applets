@@ -31,6 +31,16 @@ header {
     border-radius: 4px;
 }
 
+.status {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 20px;
+    padding: 10px;
+    background: #eef;
+    border-radius: 4px;
+}
+
 #chart-container {
     width: 100%;
     height: 600px;

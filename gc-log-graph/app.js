@@ -14,16 +14,17 @@ Credits:
 */
 
 // ============ STYLE CONSTANTS ============
-const STYLES = {
+const CONST = {
     // GC Type Colors
     colors: {
         fullGC: '#ff0000',        // Bright Red
         concurrentGC: '#da546f',  // Crimson Red
-        mixedGC: '#66f',       // Blue
+        mixedGC: '#6666ff',       // Blue
         longPause: '#ff7700',     // Orange
+        mixedLongPause: '#a74800', // Dark Orange (Chocolate)
         shortPause: '#018036',     // Dark Green
         normalGC: '#3498db',      // Light Blue
-        heapTotal: '#aaa',        // Grey
+        heapTotal: '#aaaaaa',        // Grey
         heapUsed: '#d9534f',      // Salmon Red
     },
     // Marker radii by GC type
@@ -36,30 +37,30 @@ const STYLES = {
     },
     // Priority for layering (higher = on top)
     priority: {
-        fullGC: 3,
-        concurrentGC: 2,
-        mixedGC: 2,
-        longPause: 1,
+        fullGC: 4,
+        concurrentGC: 3,
+        longPause: 2,
+        mixedGC: 1,
         normalGC: 0,
     },
     // Thresholds
     thresholds: {
         longPauseMs: 100,  // Pause longer than this is "long"
     },
-    // Area/Line graph styles
-    graph: {
-        areaTotal: { fill: 'rgba(200, 200, 200, 0.3)', stroke: '#aaa', strokeWidth: 1 },
-        areaUsed: { fill: 'rgba(217, 83, 79, 0.2)', stroke: '#d9534f', strokeWidth: 1 },
-        lineTotal: { stroke: '#333', strokeWidth: 1.5 },
-        lineUsed: { stroke: '#000', strokeWidth: 1.5 },
-    },
-    // Rate line styles
-    rates: {
-        allocRate: { stroke: '#ff7700', strokeWidth: 2, strokeDasharray: '' },       // Orange (longPause)
-        gcRate: { stroke: '#018036', strokeWidth: 2, strokeDasharray: '' },          // Green (shortPause)
-        meanAllocRate: { stroke: '#ff7700', strokeWidth: 1.5, strokeDasharray: '5,5' },
-        meanGcRate: { stroke: '#018036', strokeWidth: 1.5, strokeDasharray: '5,5' },
-    },
+};
+// Area/Line graph styles
+CONST.graph = {
+    areaTotal: { fill: CONST.colors.heapTotal + '20', stroke: CONST.colors.heapTotal, strokeWidth: 1 },
+    areaUsed: { fill: CONST.colors.heapUsed + '20', stroke: CONST.colors.heapUsed, strokeWidth: 1 },
+    lineTotal: { stroke: CONST.colors.heapTotal, strokeWidth: 1.5 },
+    lineUsed: { stroke: CONST.colors.heapUsed, strokeWidth: 1.5 },
+};
+// Rate line styles
+CONST.rates = {
+    allocRate: { stroke: CONST.colors.longPause, strokeWidth: 2, strokeDasharray: '' },
+    gcRate: { stroke: CONST.colors.shortPause, strokeWidth: 2, strokeDasharray: '' },
+    meanAllocRate: { stroke: CONST.colors.longPause, strokeWidth: 1.5, strokeDasharray: '5,5' },
+    meanGcRate: { stroke: CONST.colors.shortPause, strokeWidth: 1.5, strokeDasharray: '5,5' },
 };
 
 let currentData = null;
@@ -94,7 +95,7 @@ document.getElementById('reset-zoom').addEventListener('click', () => {
 const statusDiv = document.getElementById('status');
 const chartContainer = document.getElementById('chart-container');
 
-function handleFileUpload(event) {
+async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) {
         return;
@@ -102,52 +103,201 @@ function handleFileUpload(event) {
 
     statusDiv.textContent = 'Reading file...';
 
+    // Reset UI before starting
+    if (window.resetZoom) window.resetZoom();
+    chartContainer.innerHTML = '';
+
+    // Give UI a moment to update
+    await new Promise(r => setTimeout(r, 10));
+
     const reader = new FileReader();
-    reader.onload = function (e) {
+    reader.onload = async function (e) {
         const text = e.target.result;
         statusDiv.textContent = 'Parsing...';
-        // Use timeout to allow UI to update
-        setTimeout(() => {
-            try {
-                currentData = parseGCLog(text);
 
-                // Detect and populate timezone selector
-                const tzSelect = document.getElementById('timezone-select');
-                const logTimezone = currentData.detectedTimezone;
-
-                // Clear and repopulate options
-                tzSelect.innerHTML = '';
-
-                // Add local timezone option
-                const localOption = document.createElement('option');
-                localOption.value = 'local';
-                localOption.textContent = 'Local';
-                tzSelect.appendChild(localOption);
-
-                // Add log timezone option if detected
-                if (logTimezone) {
-                    const logOption = document.createElement('option');
-                    logOption.value = logTimezone;
-                    logOption.textContent = `Log (UTC${logTimezone})`;
-                    logOption.selected = true; // Default to log timezone
-                    tzSelect.appendChild(logOption);
-                }
-
-                statusDiv.textContent = `Parsed ${currentData.length} GC events.`;
-                currentZoomTransform = null; // Reset zoom for new log
-                renderChart(currentData);
-            } catch (err) {
-                console.error(err);
-                statusDiv.textContent = 'Error parsing file: ' + err.message;
+        try {
+            // Use cleanup to clear memory if previous run existed
+            if (currentData) {
+                currentData = null;
             }
-        }, 100);
+
+            // Yield to UI 
+            await new Promise(r => setTimeout(r, 10));
+
+            currentData = await processGCLog(text);
+
+            // Detect and populate timezone selector
+            const tzSelect = document.getElementById('timezone-select');
+            const logTimezone = currentData.detectedTimezone;
+
+            // Clear and repopulate options
+            tzSelect.innerHTML = '';
+
+            // Add local timezone option
+            const localOption = document.createElement('option');
+            localOption.value = 'local';
+            localOption.textContent = 'Local';
+            tzSelect.appendChild(localOption);
+
+            // Add log timezone option if detected
+            if (logTimezone) {
+                const logOption = document.createElement('option');
+                logOption.value = logTimezone;
+                logOption.textContent = `Log (UTC${logTimezone})`;
+                logOption.selected = true; // Default to log timezone
+                tzSelect.appendChild(logOption);
+            }
+
+            statusDiv.textContent = `${file.name}: ${currentData.length} GC events parsed${currentData.truncated ? ' (truncated)' : ''}`;
+            currentZoomTransform = null; // Reset zoom for new log
+            renderChart(currentData);
+        } catch (err) {
+            console.error(err);
+            statusDiv.textContent = 'Error parsing file: ' + err.message;
+        }
     };
     reader.readAsText(file);
 }
 
-function parseGCLog(content) {
+async function processGCLog(content) {
     const lines = content.split(/\r?\n/);
     const gcMap = new Map();
+    let totalParsedCount = 0;
+    let currentLine = 0;
+    const GLOBAL_LIMIT = 10000; // 10k events limit
+    const BATCH_SIZE = 1000; // 1k events per batch
+
+    // Async parsing loop
+    while (currentLine < lines.length && totalParsedCount < GLOBAL_LIMIT) {
+        const remaining = GLOBAL_LIMIT - totalParsedCount;
+        const batchLimit = Math.min(BATCH_SIZE, remaining);
+
+        const result = parseGCLog(lines, currentLine, batchLimit, gcMap);
+
+        currentLine = result.nextLine;
+        totalParsedCount += result.eventsParsedCount;
+
+        // Update Status (Optional but helpful)
+        statusDiv.textContent = `Parsing... ${totalParsedCount} events found`;
+        // Yield control to Event Loop
+        await new Promise(r => setTimeout(r, 0));
+    }
+    let truncated = totalParsedCount >= GLOBAL_LIMIT;
+
+    const result = Array.from(gcMap.values())
+        .filter(r => r.parsed && r.timestamp)
+        .map(r => {
+            // Merge actions into a single display string
+            r.action = r.actions.join(' + ');
+            r.duration = Math.round(r.totalDuration * 100) / 100; // Round to 2 decimals
+            return r;
+        })
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+    // Detect timezone from first timestamp
+    let detectedTimezone = null;
+    if (result.length > 0 && result[0].timestampRaw) {
+        const tzMatch = result[0].timestampRaw.match(/([+-]\d{4})$/);
+        if (tzMatch) {
+            detectedTimezone = tzMatch[1];
+        }
+    }
+
+    // Assign colors and radii based on GC type
+    result.forEach(r => {
+        // Check if any action indicates Concurrent cycle phases
+        const isConcurrent = r.actions.some(a =>
+            a.includes('Concurrent') || a.includes('Remark') || a.includes('Cleanup'));
+
+        if (r.action.includes('Pause Full')) {
+            r.color = CONST.colors.fullGC;
+            r.priority = CONST.priority.fullGC;
+            r.radius = CONST.radii.fullGC;
+        } else if (isConcurrent) {
+            r.color = CONST.colors.concurrentGC;
+            r.priority = CONST.priority.concurrentGC;
+            r.radius = CONST.radii.concurrentGC;
+        } else if (r.duration > CONST.thresholds.longPauseMs) {
+            // Check duration before type, so that long pauses override Mixed/Normal
+            r.color = CONST.colors.longPause;
+            r.priority = CONST.priority.longPause;
+            r.radius = CONST.radii.longPause;
+            if (r.action.includes('Mixed')) {
+                r.color = CONST.colors.mixedLongPause;
+            }
+        } else if (r.action.includes('Mixed')) {
+            r.color = CONST.colors.mixedGC;
+            r.priority = CONST.priority.mixedGC;
+            r.radius = CONST.radii.mixedGC;
+        } else {
+            r.color = CONST.colors.normalGC;
+            r.priority = CONST.priority.normalGC;
+            r.radius = CONST.radii.normalGC;
+        }
+    });
+
+    // ============ RATE CALCULATIONS ============
+    if (result.length > 1) {
+        const firstTime = result[0].timestamp.getTime();
+        const lastTime = result[result.length - 1].timestamp.getTime();
+        const totalTimeMs = lastTime - firstTime;
+        const meanIntervalMs = totalTimeMs / result.length;
+        const windowSize = 10;
+
+        // Rate unit = GB/s = bytes/ms / Bms2GBs
+        const Bms2GBs = (1 << 30) / 1000;
+
+        let prevAfterBytes = result[0].beforeBytes; // Initial: assume heap was at first beforeBytes
+        let totalAllocated = 0;
+        let totalReclaimed = 0;
+
+        // Calculate per-event allocation and reclaim
+        result.forEach((r, i) => {
+            r.allocatedBytes = Math.max(0, r.beforeBytes - prevAfterBytes);
+            r.reclaimedBytes = Math.max(0, r.beforeBytes - r.afterBytes);
+            totalAllocated += r.allocatedBytes;
+            totalReclaimed += r.reclaimedBytes;
+            prevAfterBytes = r.afterBytes;
+            r.elapsedMs = r.timestamp.getTime() - firstTime;
+
+            // Calculate instant rates from previous events in the window
+            let windowAllocated = r.allocatedBytes;
+            let windowReclaimed = r.reclaimedBytes;
+            let spanStart = r.elapsedMs;
+            for (let j = i - 1; j > Math.max(-1, i - windowSize); j--) {
+                windowAllocated += result[j].allocatedBytes;
+                windowReclaimed += result[j].reclaimedBytes;
+                spanStart = result[j].elapsedMs;
+            }
+            // Use actual time span if we have enough events, otherwise use total time to avoid artificial spikes
+            let span = i < windowSize ? totalTimeMs : r.elapsedMs - spanStart;
+            r.instantAllocRate = (windowAllocated / span) / Bms2GBs;
+            r.instantGcRate = (windowReclaimed / span) / Bms2GBs;
+        });
+
+        // Mean rates 
+        const meanAllocRate = totalTimeMs > 0 ? (totalAllocated / totalTimeMs) / Bms2GBs : 0;
+        const meanGcRate = totalTimeMs > 0 ? (totalReclaimed / totalTimeMs) / Bms2GBs : 0;
+
+        // Attach stats to result
+        result.rateStats = {
+            meanAllocRate,
+            meanGcRate,
+            meanIntervalMs,
+            totalAllocated,
+            totalReclaimed,
+            totalTimeMs
+        };
+    }
+
+    // Attach detected timezone to result
+    result.detectedTimezone = detectedTimezone;
+    result.truncated = truncated;
+
+    return result;
+}
+
+function parseGCLog(lines, startLine, maxEventsToParse, gcMap) {
 
     // Regex Explanation:
     // 1. Timestamp: \[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+\+\d{4})\]
@@ -170,11 +320,17 @@ function parseGCLog(content) {
     const memoryRegex = /(\d+(?:\.\d+)?)([KMG]B?)->(\d+(?:\.\d+)?)([KMG]B?)\((\d+(?:\.\d+)?)([KMG]B?)\)/;
     const durationRegex = /(\d+(?:\.\d+)?)ms/;
 
-    lines.forEach(line => {
+    let eventsParsedCount = 0;
+    let i = startLine;
+
+    // Use a for loop instead of forEach to control flow
+    for (; i < lines.length && eventsParsedCount < maxEventsToParse; i++) {
+        const line = lines[i];
+
         // Only process relevant lines to save time/noise
         // but we need to capture all lines associated with an ID for the tooltip
         const idMatch = line.match(idRegex);
-        if (!idMatch) return;
+        if (!idMatch) continue;
 
         const id = parseInt(idMatch[1], 10);
 
@@ -225,117 +381,15 @@ function parseGCLog(content) {
                 }
 
                 record.parsed = true;
+                eventsParsedCount++;
             }
-        }
-    });
-
-    const result = Array.from(gcMap.values())
-        .filter(r => r.parsed && r.timestamp)
-        .map(r => {
-            // Merge actions into a single display string
-            r.action = r.actions.join(' + ');
-            r.duration = Math.round(r.totalDuration * 100) / 100; // Round to 2 decimals
-            return r;
-        })
-        .sort((a, b) => a.timestamp - b.timestamp);
-
-    // Detect timezone from first timestamp
-    let detectedTimezone = null;
-    if (result.length > 0 && result[0].timestampRaw) {
-        const tzMatch = result[0].timestampRaw.match(/([+-]\d{4})$/);
-        if (tzMatch) {
-            detectedTimezone = tzMatch[1];
         }
     }
 
-    // Assign colors and radii based on GC type
-    result.forEach(r => {
-        // Check if any action indicates Concurrent cycle phases
-        const isConcurrent = r.actions.some(a =>
-            a.includes('Concurrent') || a.includes('Remark') || a.includes('Cleanup'));
-
-        if (r.action.includes('Pause Full')) {
-            r.color = STYLES.colors.fullGC;
-            r.priority = STYLES.priority.fullGC;
-            r.radius = STYLES.radii.fullGC;
-        } else if (isConcurrent) {
-            r.color = STYLES.colors.concurrentGC;
-            r.priority = STYLES.priority.concurrentGC;
-            r.radius = STYLES.radii.concurrentGC;
-        } else if (r.duration > STYLES.thresholds.longPauseMs) {
-            // Check duration before type - long pauses override Mixed/Normal
-            r.color = STYLES.colors.longPause;
-            r.priority = STYLES.priority.longPause;
-            r.radius = STYLES.radii.longPause;
-        } else if (r.action.includes('Mixed')) {
-            r.color = STYLES.colors.mixedGC;
-            r.priority = STYLES.priority.mixedGC;
-            r.radius = STYLES.radii.mixedGC;
-        } else {
-            r.color = STYLES.colors.normalGC;
-            r.priority = STYLES.priority.normalGC;
-            r.radius = STYLES.radii.normalGC;
-        }
-    });
-
-    // ============ RATE CALCULATIONS ============
-    if (result.length > 1) {
-        const firstTime = result[0].timestamp.getTime();
-        const lastTime = result[result.length - 1].timestamp.getTime();
-        const totalTimeMs = lastTime - firstTime;
-        const meanIntervalMs = totalTimeMs / result.length;
-        const windowSize = 10;
-        const windowMs = windowSize * meanIntervalMs;
-        // Rate unit = GB/s = bytes/ms / Bms2GBs
-        const Bms2GBs = (1 << 30) / 1000;
-
-        let prevAfterBytes = result[0].beforeBytes; // Initial: assume heap was at first beforeBytes
-        let totalAllocated = 0;
-        let totalReclaimed = 0;
-
-        // Calculate per-event allocation and reclaim
-        result.forEach((r, i) => {
-            r.allocatedBytes = Math.max(0, r.beforeBytes - prevAfterBytes);
-            r.reclaimedBytes = Math.max(0, r.beforeBytes - r.afterBytes);
-            totalAllocated += r.allocatedBytes;
-            totalReclaimed += r.reclaimedBytes;
-            prevAfterBytes = r.afterBytes;
-            r.elapsedMs = r.timestamp.getTime() - firstTime;
-
-            // Calculate instant rates from previous events in the window
-            let windowAllocated = r.allocatedBytes;
-            let windowReclaimed = r.reclaimedBytes;
-            let spanStart = r.elapsedMs;
-            for (let j = i - 1; j > Math.max(-1, i - windowSize); j--) {
-                windowAllocated += result[j].allocatedBytes;
-                windowReclaimed += result[j].reclaimedBytes;
-                spanStart = result[j].elapsedMs;
-            }
-            // Use actual time span if we have enough events, otherwise use total time to avoid artificial spikes
-            let span = i < windowSize ? totalTimeMs : r.elapsedMs - spanStart;
-            r.instantAllocRate = (windowAllocated / span) / Bms2GBs;
-            r.instantGcRate = (windowReclaimed / span) / Bms2GBs;
-        });
-
-        // Mean rates 
-        const meanAllocRate = totalTimeMs > 0 ? (totalAllocated / totalTimeMs) / Bms2GBs : 0;
-        const meanGcRate = totalTimeMs > 0 ? (totalReclaimed / totalTimeMs) / Bms2GBs : 0;
-
-        // Attach stats to result
-        result.rateStats = {
-            meanAllocRate,
-            meanGcRate,
-            meanIntervalMs,
-            totalAllocated,
-            totalReclaimed,
-            totalTimeMs
-        };
-    }
-
-    // Attach detected timezone to result
-    result.detectedTimezone = detectedTimezone;
-
-    return result;
+    return {
+        eventsParsedCount,
+        nextLine: i
+    };
 }
 
 function parseSize(value, unit) {
@@ -462,9 +516,9 @@ function renderChart(data) {
             .datum(data)
             .attr("class", "area area-heap-total")
             .attr("d", areaTotal)
-            .attr("fill", STYLES.graph.areaTotal.fill)
-            .attr("stroke", STYLES.graph.areaTotal.stroke)
-            .attr("stroke-width", STYLES.graph.areaTotal.strokeWidth);
+            .attr("fill", CONST.graph.areaTotal.fill)
+            .attr("stroke", CONST.graph.areaTotal.stroke)
+            .attr("stroke-width", CONST.graph.areaTotal.strokeWidth);
 
         const areaUsed = d3.area()
             .x(d => x(d.timestamp))
@@ -475,9 +529,9 @@ function renderChart(data) {
             .datum(data)
             .attr("class", "area area-heap-used")
             .attr("d", areaUsed)
-            .attr("fill", STYLES.graph.areaUsed.fill)
-            .attr("stroke", STYLES.graph.areaUsed.stroke)
-            .attr("stroke-width", STYLES.graph.areaUsed.strokeWidth);
+            .attr("fill", CONST.graph.areaUsed.fill)
+            .attr("stroke", CONST.graph.areaUsed.stroke)
+            .attr("stroke-width", CONST.graph.areaUsed.strokeWidth);
     } else {
         // Line graph with black lines
         const lineTotal = d3.line()
@@ -489,8 +543,8 @@ function renderChart(data) {
             .attr("class", "line line-heap-total")
             .attr("d", lineTotal)
             .attr("fill", "none")
-            .attr("stroke", STYLES.graph.lineTotal.stroke)
-            .attr("stroke-width", STYLES.graph.lineTotal.strokeWidth);
+            .attr("stroke", CONST.graph.lineTotal.stroke)
+            .attr("stroke-width", CONST.graph.lineTotal.strokeWidth);
 
         const lineUsed = d3.line()
             .x(d => x(d.timestamp))
@@ -501,8 +555,8 @@ function renderChart(data) {
             .attr("class", "line line-heap-used")
             .attr("d", lineUsed)
             .attr("fill", "none")
-            .attr("stroke", STYLES.graph.lineUsed.stroke)
-            .attr("stroke-width", STYLES.graph.lineUsed.strokeWidth);
+            .attr("stroke", CONST.graph.lineUsed.stroke)
+            .attr("stroke-width", CONST.graph.lineUsed.strokeWidth);
     }
 
     // --- Vertical Segments (Before -> After) ---
@@ -558,9 +612,9 @@ function renderChart(data) {
             .attr("x2", width)
             .attr("y1", yRate(stats.meanAllocRate))
             .attr("y2", yRate(stats.meanAllocRate))
-            .attr("stroke", STYLES.rates.meanAllocRate.stroke)
-            .attr("stroke-width", STYLES.rates.meanAllocRate.strokeWidth)
-            .attr("stroke-dasharray", STYLES.rates.meanAllocRate.strokeDasharray);
+            .attr("stroke", CONST.rates.meanAllocRate.stroke)
+            .attr("stroke-width", CONST.rates.meanAllocRate.strokeWidth)
+            .attr("stroke-dasharray", CONST.rates.meanAllocRate.strokeDasharray);
 
         // Mean GC rate (horizontal dashed line)
         chartContent.append("line")
@@ -569,9 +623,9 @@ function renderChart(data) {
             .attr("x2", width)
             .attr("y1", yRate(stats.meanGcRate))
             .attr("y2", yRate(stats.meanGcRate))
-            .attr("stroke", STYLES.rates.meanGcRate.stroke)
-            .attr("stroke-width", STYLES.rates.meanGcRate.strokeWidth)
-            .attr("stroke-dasharray", STYLES.rates.meanGcRate.strokeDasharray);
+            .attr("stroke", CONST.rates.meanGcRate.stroke)
+            .attr("stroke-width", CONST.rates.meanGcRate.strokeWidth)
+            .attr("stroke-dasharray", CONST.rates.meanGcRate.strokeDasharray);
 
         // Instant allocation rate curve
         const allocRateLine = d3.line()
@@ -584,8 +638,8 @@ function renderChart(data) {
             .attr("class", "line alloc-rate-line")
             .attr("d", allocRateLine)
             .attr("fill", "none")
-            .attr("stroke", STYLES.rates.allocRate.stroke)
-            .attr("stroke-width", STYLES.rates.allocRate.strokeWidth);
+            .attr("stroke", CONST.rates.allocRate.stroke)
+            .attr("stroke-width", CONST.rates.allocRate.strokeWidth);
 
         // Instant GC rate curve
         const gcRateLine = d3.line()
@@ -598,8 +652,8 @@ function renderChart(data) {
             .attr("class", "line gc-rate-line")
             .attr("d", gcRateLine)
             .attr("fill", "none")
-            .attr("stroke", STYLES.rates.gcRate.stroke)
-            .attr("stroke-width", STYLES.rates.gcRate.strokeWidth);
+            .attr("stroke", CONST.rates.gcRate.stroke)
+            .attr("stroke-width", CONST.rates.gcRate.strokeWidth);
     }
 
     // --- Interactive Points ---
@@ -704,7 +758,7 @@ Duration: ${d.duration}ms`;
                 <div style="margin-bottom: 10px; color: #000;">
                     Time: ${d.timestampRaw ? d.timestampRaw.replace('T', ' ') : d.timestamp.toISOString()}<br/>
                     Memory: ${formatBytes(d.beforeBytes)} → ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>
-                    Duration: <span style="color: ${d.duration > 100 ? STYLES.colors.longPause : STYLES.colors.shortPause};">${d.duration}ms</span>
+                    Duration: <span style="color: ${d.duration > 100 ? CONST.colors.longPause : CONST.colors.shortPause};">${d.duration}ms</span>
                 </div>
                 <div style="font-family: monospace; font-size: 11px; white-space: pre-wrap; color: #000; background: #eee; padding: 10px; border-radius: 4px; max-height: 50vh; overflow-y: auto;">${escapeHtml(trimmedLines.join('\n'))}</div>
             `;
@@ -812,20 +866,21 @@ Duration: ${d.duration}ms`;
         .attr("transform", `translate(${width - 180}, 20)`);
 
     const legendItems = [
-        { color: STYLES.colors.heapTotal, label: "Heap Total", type: "rect" },
-        { color: STYLES.colors.heapUsed, label: "Heap Used (After GC)", type: "rect" },
-        { color: STYLES.colors.fullGC, label: "Full GC", type: "circle", r: STYLES.radii.fullGC },
-        { color: STYLES.colors.concurrentGC, label: "Concurrent GC", type: "circle", r: STYLES.radii.concurrentGC },
-        { color: STYLES.colors.longPause, label: `Long Pause (>${STYLES.thresholds.longPauseMs}ms)`, type: "circle", r: STYLES.radii.longPause },
-        { color: STYLES.colors.mixedGC, label: "Mixed GC", type: "circle", r: STYLES.radii.mixedGC },
-        { color: STYLES.colors.normalGC, label: "Normal GC", type: "circle", r: STYLES.radii.normalGC }
+        { color: CONST.colors.heapTotal, label: "Heap Total", type: "rect" },
+        { color: CONST.colors.heapUsed, label: "Heap Used (After GC)", type: "rect" },
+        { color: CONST.colors.fullGC, label: "Full GC", type: "circle", r: CONST.radii.fullGC },
+        { color: CONST.colors.concurrentGC, label: "Concurrent GC", type: "circle", r: CONST.radii.concurrentGC },
+        { color: CONST.colors.longPause, label: `Long Pause (>${CONST.thresholds.longPauseMs}ms)`, type: "circle", r: CONST.radii.longPause },
+        { color: CONST.colors.mixedGC, label: "Mixed GC", type: "circle", r: CONST.radii.mixedGC },
+        { color: CONST.colors.mixedLongPause, label: "Mixed Long Pause", type: "circle", r: CONST.radii.longPause },
+        { color: CONST.colors.normalGC, label: "Normal GC", type: "circle", r: CONST.radii.normalGC }
     ];
 
     // Add rate legend items if showing rates
     if (showRates && data.rateStats) {
         legendItems.push(
-            { color: STYLES.rates.allocRate.stroke, label: "Alloc Rate", type: "line" },
-            { color: STYLES.rates.gcRate.stroke, label: "GC Rate", type: "line" }
+            { color: CONST.rates.allocRate.stroke, label: "Alloc Rate", type: "line" },
+            { color: CONST.rates.gcRate.stroke, label: "GC Rate", type: "line" }
         );
     }
 

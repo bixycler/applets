@@ -18,7 +18,6 @@
 
         <div class="controls">
             <input type="file" id="log-input" accept=".log,.txt" />
-            <div id="status" style="margin-left: 10px; color: #888;">Waiting for file...</div>
             <label style="margin-left: 20px;">
                 Graph Type:
                 <select id="graph-type" style="margin-left: 5px;">
@@ -45,6 +44,10 @@
 
         <div id="chart-container"></div>
         <div id="tooltip" class="tooltip" style="opacity: 0;"></div>
+
+        <div class="status">
+            <div id="status" style="margin-left: 10px; color: #888;">Waiting for file...</div>
+        </div>
     </div>
 
     <script src="app.js"></script>
