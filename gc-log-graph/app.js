@@ -63,6 +63,12 @@ CONST.rates = {
     meanGcRate: { stroke: CONST.colors.shortPause, strokeWidth: 1.5, strokeDasharray: '5,5' },
 };
 
+
+
+// Initialize Extension Registry
+if (!window.GCGraphExtensions) {
+    window.GCGraphExtensions = [];
+}
 let currentData = null;
 let currentZoomTransform = null; // Store zoom state across re-renders
 
@@ -87,6 +93,32 @@ document.getElementById('timezone-select').addEventListener('change', () => {
         renderChart(currentData);
     }
 });
+const extSelect = document.getElementById('extension-select');
+extSelect.addEventListener('change', () => {
+    if (currentData) {
+        renderChart(currentData);
+    }
+});
+
+// Populate Extensions Dropdown
+(function () {
+    if (window.GCGraphExtensions && window.GCGraphExtensions.length > 0) {
+        window.GCGraphExtensions.forEach(ext => {
+            const option = document.createElement('option');
+            option.value = ext.name;
+            option.textContent = ext.name;
+            extSelect.appendChild(option);
+        });
+        // Select the first one by default if user hasn't chosen? 
+        // User plan says: "Default to the first extension if available".
+        // But let's check if "none" is first. The HTML has "none" hardcoded.
+        // So we just appended. To select first extension:
+        if (extSelect.options.length > 1) {
+            extSelect.selectedIndex = 1; // Select first added extension
+        }
+    }
+})();
+
 document.getElementById('reset-zoom').addEventListener('click', () => {
     if (window.resetZoom) {
         window.resetZoom();
@@ -166,6 +198,13 @@ async function processGCLog(content) {
     let currentLine = 0;
     const GLOBAL_LIMIT = 10000; // 10k events limit
     const BATCH_SIZE = 1000; // 1k events per batch
+
+
+
+    // RESET EXTENSIONS
+    window.GCGraphExtensions.forEach(ext => {
+        if (typeof ext.reset === 'function') ext.reset();
+    });
 
     // Async parsing loop
     while (currentLine < lines.length && totalParsedCount < GLOBAL_LIMIT) {
@@ -294,6 +333,13 @@ async function processGCLog(content) {
     result.detectedTimezone = detectedTimezone;
     result.truncated = truncated;
 
+
+
+    // FINISH EXTENSIONS (Post-processing)
+    window.GCGraphExtensions.forEach(ext => {
+        if (typeof ext.finish === 'function') ext.finish();
+    });
+
     return result;
 }
 
@@ -330,6 +376,16 @@ function parseGCLog(lines, startLine, maxEventsToParse, gcMap) {
         // Only process relevant lines to save time/noise
         // but we need to capture all lines associated with an ID for the tooltip
         const idMatch = line.match(idRegex);
+
+
+        // EXTENSION PARSING HOOK
+        // Give extensions a chance to parse the line even if it's not a GC line
+        window.GCGraphExtensions.forEach(ext => {
+            if (typeof ext.parse === 'function') {
+                ext.parse(line);
+            }
+        });
+
         if (!idMatch) continue;
 
         const id = parseInt(idMatch[1], 10);
@@ -656,6 +712,21 @@ function renderChart(data) {
             .attr("stroke-width", CONST.rates.gcRate.strokeWidth);
     }
 
+    // --- RENDER EXTENSIONS ---
+    const selectedExtName = document.getElementById('extension-select').value;
+
+    window.GCGraphExtensions.forEach(ext => {
+        if (selectedExtName !== 'none' && ext.name === selectedExtName) {
+            if (typeof ext.render === 'function') {
+                try {
+                    ext.render(chartContent, { x, y }, { width, height });
+                } catch (e) {
+                    console.error(`Error rendering extension ${ext.name}:`, e);
+                }
+            }
+        }
+    });
+
     // --- Interactive Points ---
     const tooltip = d3.select("#tooltip");
 
@@ -854,6 +925,21 @@ Duration: ${d.duration}ms`;
                 .x(d => x(d.timestamp))
                 .y(d => yRate ? yRate(d.instantGcRate || 0) : 0)
                 .curve(d3.curveMonotoneX));
+
+        // Update Extensions
+        const selectedExtName = document.getElementById('extension-select').value;
+        window.GCGraphExtensions.forEach(ext => {
+            if (selectedExtName !== 'none' && ext.name === selectedExtName) {
+                if (typeof ext.onZoom === 'function') {
+                    ext.onZoom({ x, y });
+                }
+            } else {
+                // Optimization: Hide or handle non-selected extensions if they left artifacts (rendered once then switched)?
+                // renderChart clears innerHTML so switching cleans up.
+                // Zoom only updates. If we switch extension, renderChart receives event and redraws.
+                // So here we only need to update the *visible* extension.
+            }
+        });
     }
 
     // Reset zoom function
