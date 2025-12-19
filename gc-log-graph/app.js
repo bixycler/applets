@@ -135,8 +135,8 @@ async function handleFileUpload(event) {
 
     statusDiv.textContent = 'Reading file...';
 
-    // Reset UI before starting
-    if (window.resetZoom) window.resetZoom();
+    // Reset UI and state before starting new file
+    currentZoomTransform = null;
     // Note: chartContainer is cleared inside renderChart, no need to do it here
 
     const reader = new FileReader();
@@ -458,6 +458,8 @@ function parseSize(value, unit) {
 }
 
 function renderChart(data) {
+    // Stop any pending transitions and remove zoom listeners from old chart
+    d3.select(chartContainer).selectAll("svg").interrupt().on(".zoom", null);
     chartContainer.innerHTML = '';
 
     if (data.length === 0) {
