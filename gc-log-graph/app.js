@@ -14,48 +14,16 @@ Credits:
 */
 
 // ============ STYLE CONSTANTS ============
-const CONST = {
-    // GC Type Colors
-    colors: {
-        fullGC: '#ff0000',        // Bright Red
-        concurrentGC: '#da546f',  // Crimson Red
-        mixedGC: '#6666ff',       // Blue
-        longPause: '#ff7700',     // Orange
-        mixedLongPause: '#a74800', // Dark Orange (Chocolate)
-        shortPause: '#018036',     // Dark Green
-        normalGC: '#3498db',      // Light Blue
-        heapTotal: '#aaaaaa',        // Grey
-        heapUsed: '#d9534f',      // Salmon Red
-    },
-    // Marker radii by GC type
-    radii: {
-        fullGC: 5,
-        concurrentGC: 3,
-        mixedGC: 3,
-        longPause: 3,
-        normalGC: 2,
-    },
-    // Priority for layering (higher = on top)
-    priority: {
-        fullGC: 4,
-        concurrentGC: 3,
-        longPause: 2,
-        mixedGC: 1,
-        normalGC: 0,
-    },
-    // Thresholds
-    thresholds: {
-        longPauseMs: 100,  // Pause longer than this is "long"
-    },
-};
-// Area/Line graph styles
+// ============ STYLE CONSTANTS ============
+const CONST = window.GCGraphConfig.constants;
+
+// Derived styles (Defined by CONST.colors)
 CONST.graph = {
     areaTotal: { fill: CONST.colors.heapTotal + '20', stroke: CONST.colors.heapTotal, strokeWidth: 1 },
     areaUsed: { fill: CONST.colors.heapUsed + '20', stroke: CONST.colors.heapUsed, strokeWidth: 1 },
     lineTotal: { stroke: CONST.colors.heapTotal, strokeWidth: 1.5 },
     lineUsed: { stroke: CONST.colors.heapUsed, strokeWidth: 1.5 },
 };
-// Rate line styles
 CONST.rates = {
     allocRate: { stroke: CONST.colors.longPause, strokeWidth: 2, strokeDasharray: '' },
     gcRate: { stroke: CONST.colors.shortPause, strokeWidth: 2, strokeDasharray: '' },

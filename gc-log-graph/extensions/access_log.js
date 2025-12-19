@@ -160,47 +160,6 @@
                 .attr('class', 'ext-access-log')
                 .attr('transform', 'translate(0,0)'); // Explicit identity transform
 
-            // DEBUG: Draw a fixed rectangle at logical x=100 to check coordinate system
-            extGroup.append("rect")
-                .attr("x", 100)
-                .attr("y", 100)
-                .attr("width", 50)
-                .attr("height", 50)
-                .attr("fill", "red")
-                .attr("stroke", "black");
-
-            const xDomain = x.domain();
-            const sampleDate = this._events[0].timestamp;
-            console.log(`[AccessLog] render() scale diagnostics:`);
-            console.log(`  - x.domain: [${xDomain[0].getTime()}, ${xDomain[1].getTime()}]`);
-            console.log(`  - x.range:  [${x.range()[0]}, ${x.range()[1]}]`);
-            console.log(`  - Event 0 time: ${sampleDate.getTime()} (${sampleDate.toISOString()})`);
-            console.log(`  - Event 0 x(time): ${x(sampleDate)}`);
-
-            // Log DOM position immediately
-            const rect = extGroup.node().getBoundingClientRect();
-            console.log(`[AccessLog] Group DOM Position (Initial):`, {
-                x: rect.x,
-                left: rect.left,
-                width: rect.width,
-                height: rect.height,
-                top: rect.top
-            });
-
-            // Global helper for user-triggered debugging
-            window.debugAccess = () => {
-                const group = document.querySelector('.ext-access-log');
-                const firstBar = document.querySelector('.acc-bar');
-                const gRect = group ? group.getBoundingClientRect() : null;
-
-                console.log("--- AccessLog GLOBAL DEBUG ---");
-                console.log("Group DOM Position:", gRect);
-                console.log("Group BBox:", group ? group.getBBox() : "None");
-                console.log("First Bar x1:", firstBar ? firstBar.getAttribute('x1') : "None");
-                console.log("Current Domain:", x.domain().map(d => d.getTime()));
-                console.log("Calculated X0 now:", x(this._events[0].timestamp));
-            };
-
             const RATE_HEIGHT = height * 0.5; // 50% of graph height
 
             this._yScales = {};
@@ -221,12 +180,16 @@
                             .y1(d => yScale(d[metric])) // Relative
                             .curve(d3.curveMonotoneX);
 
+                        const metricConfig = (config.colors && config.colors[metric]) || {};
+                        const fill = metricConfig.fill || (metric === 'rps' ? 'steelblue' : 'orange');
+                        const opacity = metricConfig.opacity || 0.1;
+
                         extGroup.append('path')
                             .datum(this._events)
                             .attr('class', `acc-rate-area acc-rate-${metric}`)
                             .attr('d', areaGenerator)
-                            .attr('fill', (config.colors && config.colors[metric]) || (metric === 'rps' ? 'steelblue' : 'orange'))
-                            .attr('opacity', 0.2)
+                            .attr('fill', fill)
+                            .attr('opacity', opacity)
                             .attr('stroke', 'none');
                     }
                 }
@@ -244,16 +207,17 @@
                 .attr('y2', BAND_Y_TOP + BAND_HEIGHT)
                 .attr('stroke', d => {
                     const status = d.status || 200;
-                    if (status >= 500) return '#e74c3c'; // Red
-                    if (status >= 400) return '#f1c40f'; // Yellow
-                    return '#2ecc71'; // Green
+                    const statusColors = config.colors.status || {};
+                    if (status >= 500) return statusColors.error || '#e74c3c';
+                    if (status >= 400) return statusColors.warning || '#f1c40f';
+                    return statusColors.success || '#2ecc71';
                 })
                 .attr('stroke-width', 1)
                 .attr('stroke-opacity', 0.6);
 
             // --- 3. Render Top-3 Colored Dots ---
             const top3Requests = this._getTop3Requests();
-            const colorMap = { 0: '#e74c3c', 1: '#f1c40f', 2: '#2ecc71' }; // Red, Yellow, Green
+            const rankColors = config.colors.rank || {};
 
             extGroup.selectAll('.acc-dot')
                 .data(this._events)
@@ -266,15 +230,15 @@
                 .attr('fill', d => {
                     const methodUrl = `${d.method} ${d.url}`;
                     const rank = top3Requests.indexOf(methodUrl);
-                    return rank !== -1 ? colorMap[rank] : '#7f8c8d'; // Grey for others
+                    return rank !== -1 ? (rankColors[rank] || rankColors.default || '#7f8c8d') : (rankColors.default || '#7f8c8d');
                 })
                 .style('opacity', d => {
                     const methodUrl = `${d.method} ${d.url}`;
                     return top3Requests.indexOf(methodUrl) !== -1 ? 1 : 0.1; // Dim non-top-3
                 })
                 .on("mouseover", function (event, d) {
-                    const sizeKB = (d.size / 1024).toFixed(1);
-                    const bpsStr = d.Bps > 1024 * 1024 ? (d.Bps / (1024 * 1024)).toFixed(2) + " MB/s" : (d.Bps / 1024).toFixed(1) + " KB/s";
+                    const sizeStr = window.formatResponseSize(d.size);
+                    const bpsStr = window.formatResponseSize(d.Bps) + "/s";
 
                     // Human-readable latency
                     let latencyStr = `${d.latency} μs`;
@@ -286,7 +250,7 @@
 
                     d3.select("#tooltip")
                         .style("opacity", 1)
-                        .html(`<strong>Access</strong><br/>Time: ${d.timestamp.toISOString()}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${d.size} B (${sizeKB} KB)<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`)
+                        .html(`<strong>Access</strong><br/>Time: ${d.timestamp.toISOString()}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`)
                         .style("left", (event.pageX + 10) + "px")
                         .style("top", (event.pageY - 10) + "px");
                 })
