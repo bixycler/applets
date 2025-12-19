@@ -14,48 +14,16 @@ Credits:
 */
 
 // ============ STYLE CONSTANTS ============
-const CONST = {
-    // GC Type Colors
-    colors: {
-        fullGC: '#ff0000',        // Bright Red
-        concurrentGC: '#da546f',  // Crimson Red
-        mixedGC: '#6666ff',       // Blue
-        longPause: '#ff7700',     // Orange
-        mixedLongPause: '#a74800', // Dark Orange (Chocolate)
-        shortPause: '#018036',     // Dark Green
-        normalGC: '#3498db',      // Light Blue
-        heapTotal: '#aaaaaa',        // Grey
-        heapUsed: '#d9534f',      // Salmon Red
-    },
-    // Marker radii by GC type
-    radii: {
-        fullGC: 5,
-        concurrentGC: 3,
-        mixedGC: 3,
-        longPause: 3,
-        normalGC: 2,
-    },
-    // Priority for layering (higher = on top)
-    priority: {
-        fullGC: 4,
-        concurrentGC: 3,
-        longPause: 2,
-        mixedGC: 1,
-        normalGC: 0,
-    },
-    // Thresholds
-    thresholds: {
-        longPauseMs: 100,  // Pause longer than this is "long"
-    },
-};
-// Area/Line graph styles
+// ============ STYLE CONSTANTS ============
+const CONST = window.GCGraphConfig.constants;
+
+// Derived styles (Defined by CONST.colors)
 CONST.graph = {
     areaTotal: { fill: CONST.colors.heapTotal + '20', stroke: CONST.colors.heapTotal, strokeWidth: 1 },
     areaUsed: { fill: CONST.colors.heapUsed + '20', stroke: CONST.colors.heapUsed, strokeWidth: 1 },
     lineTotal: { stroke: CONST.colors.heapTotal, strokeWidth: 1.5 },
     lineUsed: { stroke: CONST.colors.heapUsed, strokeWidth: 1.5 },
 };
-// Rate line styles
 CONST.rates = {
     allocRate: { stroke: CONST.colors.longPause, strokeWidth: 2, strokeDasharray: '' },
     gcRate: { stroke: CONST.colors.shortPause, strokeWidth: 2, strokeDasharray: '' },
@@ -135,12 +103,9 @@ async function handleFileUpload(event) {
 
     statusDiv.textContent = 'Reading file...';
 
-    // Reset UI before starting
-    if (window.resetZoom) window.resetZoom();
-    chartContainer.innerHTML = '';
-
-    // Give UI a moment to update
-    await new Promise(r => setTimeout(r, 10));
+    // Reset UI and state before starting new file
+    currentZoomTransform = null;
+    // Note: chartContainer is cleared inside renderChart, no need to do it here
 
     const reader = new FileReader();
     reader.onload = async function (e) {
@@ -461,6 +426,8 @@ function parseSize(value, unit) {
 }
 
 function renderChart(data) {
+    // Stop any pending transitions and remove zoom listeners from old chart
+    d3.select(chartContainer).selectAll("svg").interrupt().on(".zoom", null);
     chartContainer.innerHTML = '';
 
     if (data.length === 0) {
@@ -470,16 +437,19 @@ function renderChart(data) {
 
     const margin = { top: 10, right: 60, bottom: 20, left: 50 };
     const width = chartContainer.clientWidth - margin.left - margin.right;
-    const height = 600 - margin.top - margin.bottom;
+    const height = 400 - margin.top - margin.bottom;
 
-    const svg = d3.select("#chart-container")
-        .append("svg")
+    // Create SVG
+    const svg = d3.select(chartContainer).append("svg")
         .attr("width", width + margin.left + margin.right)
         .attr("height", height + margin.top + margin.bottom);
 
+    // Generate unique clip-path ID to avoid stale references on re-render
+    const clipId = `chart-clip-${Date.now()}`;
+
     // Add clip path to prevent rendering outside chart area
     svg.append("defs").append("clipPath")
-        .attr("id", "chart-clip")
+        .attr("id", clipId)
         .append("rect")
         .attr("width", width)
         .attr("height", height);
@@ -555,7 +525,7 @@ function renderChart(data) {
 
     // --- Create clipped group for zoomable content ---
     const chartContent = g.append("g")
-        .attr("clip-path", "url(#chart-clip)");
+        .attr("clip-path", `url(#${clipId})`);
 
     // --- Graph Type ---
     const graphType = document.getElementById('graph-type').value;
@@ -711,9 +681,9 @@ function renderChart(data) {
             .attr("stroke", CONST.rates.gcRate.stroke)
             .attr("stroke-width", CONST.rates.gcRate.strokeWidth);
     }
-
     // --- RENDER EXTENSIONS ---
-    const selectedExtName = document.getElementById('extension-select').value;
+    const extSelect = document.getElementById('extension-select');
+    const selectedExtName = extSelect ? extSelect.value : 'none';
 
     window.GCGraphExtensions.forEach(ext => {
         if (selectedExtName !== 'none' && ext.name === selectedExtName) {
