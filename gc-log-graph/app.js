@@ -137,10 +137,7 @@ async function handleFileUpload(event) {
 
     // Reset UI before starting
     if (window.resetZoom) window.resetZoom();
-    chartContainer.innerHTML = '';
-
-    // Give UI a moment to update
-    await new Promise(r => setTimeout(r, 10));
+    // Note: chartContainer is cleared inside renderChart, no need to do it here
 
     const reader = new FileReader();
     reader.onload = async function (e) {
@@ -470,16 +467,19 @@ function renderChart(data) {
 
     const margin = { top: 10, right: 60, bottom: 20, left: 50 };
     const width = chartContainer.clientWidth - margin.left - margin.right;
-    const height = 600 - margin.top - margin.bottom;
+    const height = 400 - margin.top - margin.bottom;
 
-    const svg = d3.select("#chart-container")
-        .append("svg")
+    // Create SVG
+    const svg = d3.select(chartContainer).append("svg")
         .attr("width", width + margin.left + margin.right)
         .attr("height", height + margin.top + margin.bottom);
 
+    // Generate unique clip-path ID to avoid stale references on re-render
+    const clipId = `chart-clip-${Date.now()}`;
+
     // Add clip path to prevent rendering outside chart area
     svg.append("defs").append("clipPath")
-        .attr("id", "chart-clip")
+        .attr("id", clipId)
         .append("rect")
         .attr("width", width)
         .attr("height", height);
@@ -555,7 +555,7 @@ function renderChart(data) {
 
     // --- Create clipped group for zoomable content ---
     const chartContent = g.append("g")
-        .attr("clip-path", "url(#chart-clip)");
+        .attr("clip-path", `url(#${clipId})`);
 
     // --- Graph Type ---
     const graphType = document.getElementById('graph-type').value;
@@ -711,9 +711,9 @@ function renderChart(data) {
             .attr("stroke", CONST.rates.gcRate.stroke)
             .attr("stroke-width", CONST.rates.gcRate.strokeWidth);
     }
-
     // --- RENDER EXTENSIONS ---
-    const selectedExtName = document.getElementById('extension-select').value;
+    const extSelect = document.getElementById('extension-select');
+    const selectedExtName = extSelect ? extSelect.value : 'none';
 
     window.GCGraphExtensions.forEach(ext => {
         if (selectedExtName !== 'none' && ext.name === selectedExtName) {

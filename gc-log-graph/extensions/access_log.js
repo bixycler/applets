@@ -10,11 +10,12 @@
 
         // Regex to parse Access Log lines
         // Example: ... [09/Nov/2025:22:39:21 +0900] "POST /services/airSearch HTTP/1.1" 200 138179 698743
-        // We capture: timestamp, method, url, status, size, latency
-        _regex: /\[(\d{2}\/[A-Za-z]{3}\/\d{4}:\d{2}:\d{2}:\d{2}\s[+-]\d{4})\]\s+"([A-Z]+)\s+([^"]+)\s+HTTP[^"]*"\s+(\d+)\s+(\d+)\s+(\d+)/,
+        // We make trailing fields optional to be more robust.
+        _regex: /\[(\d{2}\/[A-Za-z]{3}\/\d{4}:\d{2}:\d{2}:\d{2}\s[+-]\d{4})\]\s+"([A-Z]+)\s+([^"]+)\s+HTTP[^"]*"(?:\s+(\d+))?(?:\s+(\d+))?(?:\s+(\d+))?/,
 
         reset() {
             this._events = [];
+            console.log("[AccessLog] Reset.");
         },
 
         parse(line) {
@@ -36,9 +37,9 @@
                         timestampRaw: rawTime,
                         method: match[2],
                         url: match[3],
-                        status: parseInt(match[4], 10),
-                        size: parseInt(match[5], 10),
-                        latency: parseInt(match[6], 10),
+                        status: match[4] ? parseInt(match[4], 10) : null,
+                        size: match[5] ? parseInt(match[5], 10) : 0,
+                        latency: match[6] ? parseInt(match[6], 10) : 0,
                         originalLine: line
                     });
                     return true;
@@ -134,14 +135,14 @@
                     e.Bps = 0;
                 }
             });
-
-            console.log(`[AccessLog] Parsed ${this._events.length} events.`);
         },
 
         render(chartGroup, scales, dims) {
+            console.log(`[AccessLog] render() called. Events to draw: ${this._events.length}`);
             if (this._events.length === 0) return;
 
             const { x } = scales;
+
             const { height } = dims;
             const config = window.GCGraphConfig ? window.GCGraphConfig.accessLog : { metrics: ['rps'], colors: {} };
             const metrics = config.metrics || ['rps'];
@@ -152,45 +153,86 @@
             const BAND_Y_TOP = DOT_RADIUS;
 
             // --- 1. Render Upside-Down Rate Plots ---
-            const extGroup = chartGroup.append('g').attr('class', 'ext-access-log');
+            // Remove any existing group first to be safe
+            chartGroup.select('.ext-access-log').remove();
+
+            const extGroup = chartGroup.append('g')
+                .attr('class', 'ext-access-log')
+                .attr('transform', 'translate(0,0)'); // Explicit identity transform
+
+            // DEBUG: Draw a fixed rectangle at logical x=100 to check coordinate system
+            extGroup.append("rect")
+                .attr("x", 100)
+                .attr("y", 100)
+                .attr("width", 50)
+                .attr("height", 50)
+                .attr("fill", "red")
+                .attr("stroke", "black");
+
+            const xDomain = x.domain();
+            const sampleDate = this._events[0].timestamp;
+            console.log(`[AccessLog] render() scale diagnostics:`);
+            console.log(`  - x.domain: [${xDomain[0].getTime()}, ${xDomain[1].getTime()}]`);
+            console.log(`  - x.range:  [${x.range()[0]}, ${x.range()[1]}]`);
+            console.log(`  - Event 0 time: ${sampleDate.getTime()} (${sampleDate.toISOString()})`);
+            console.log(`  - Event 0 x(time): ${x(sampleDate)}`);
+
+            // Log DOM position immediately
+            const rect = extGroup.node().getBoundingClientRect();
+            console.log(`[AccessLog] Group DOM Position (Initial):`, {
+                x: rect.x,
+                left: rect.left,
+                width: rect.width,
+                height: rect.height,
+                top: rect.top
+            });
+
+            // Global helper for user-triggered debugging
+            window.debugAccess = () => {
+                const group = document.querySelector('.ext-access-log');
+                const firstBar = document.querySelector('.acc-bar');
+                const gRect = group ? group.getBoundingClientRect() : null;
+
+                console.log("--- AccessLog GLOBAL DEBUG ---");
+                console.log("Group DOM Position:", gRect);
+                console.log("Group BBox:", group ? group.getBBox() : "None");
+                console.log("First Bar x1:", firstBar ? firstBar.getAttribute('x1') : "None");
+                console.log("Current Domain:", x.domain().map(d => d.getTime()));
+                console.log("Calculated X0 now:", x(this._events[0].timestamp));
+            };
+
             const RATE_HEIGHT = height * 0.5; // 50% of graph height
 
             this._yScales = {};
 
             metrics.forEach(metric => {
-                // Max for scale
-                const maxVal = d3.max(this._events, d => d[metric]) || 1;
+                if (metric === 'rps' || metric === 'Bps') {
+                    // Find max
+                    const maxVal = d3.max(this._events, d => d[metric]);
+                    if (maxVal > 0) {
+                        const yScale = d3.scaleLinear()
+                            .domain([0, maxVal])
+                            .range([BAND_Y_TOP, BAND_Y_TOP + RATE_HEIGHT]); // Downwards
+                        this._yScales[metric] = yScale;
 
-                // Y Axis for Rate (Domain: 0..Max, Range: 0..RATE_HEIGHT)
-                // 0 mapped to 0 (top), Max mapped to RATE_HEIGHT (downwards)
-                const yScale = d3.scaleLinear()
-                    .domain([0, maxVal])
-                    .range([0, RATE_HEIGHT]);
+                        const areaGenerator = d3.area()
+                            .x(d => x(d.timestamp))
+                            .y0(0) // Relative to g transform
+                            .y1(d => yScale(d[metric])) // Relative
+                            .curve(d3.curveMonotoneX);
 
-                this._yScales[metric] = yScale;
-
-                const areaGenerator = d3.area()
-                    .x(d => x(d.timestamp))
-                    .y0(0)
-                    .y1(d => yScale(d[metric]))
-                    .curve(d3.curveMonotoneX); // Smooth it out
-
-                const mConfig = (config.colors && config.colors[metric]) || { fill: '#3498db', opacity: 0.1 };
-
-                // Draw Area (Background)
-                extGroup.append('path')
-                    .datum(this._events)
-                    .attr('class', `acc-rate-area acc-rate-${metric}`)
-                    .attr('d', areaGenerator)
-                    .attr('fill', mConfig.fill)
-                    .attr('opacity', mConfig.opacity)
-                    .attr('stroke', 'none');
+                        extGroup.append('path')
+                            .datum(this._events)
+                            .attr('class', `acc-rate-area acc-rate-${metric}`)
+                            .attr('d', areaGenerator)
+                            .attr('fill', (config.colors && config.colors[metric]) || (metric === 'rps' ? 'steelblue' : 'orange'))
+                            .attr('opacity', 0.2)
+                            .attr('stroke', 'none');
+                    }
+                }
             });
 
-            // --- 2. Render Bars & Dots ---
-            // Data points at y=DOT_RADIUS. Bars go down to BAND_HEIGHT.
-            const BOTTOM_Y = BAND_HEIGHT + BAND_Y_TOP;
-
+            // --- 2. Render Individual Access Bars ---
             extGroup.selectAll('.acc-bar')
                 .data(this._events)
                 .enter()
@@ -199,10 +241,19 @@
                 .attr('x1', d => x(d.timestamp))
                 .attr('x2', d => x(d.timestamp))
                 .attr('y1', BAND_Y_TOP)
-                .attr('y2', BOTTOM_Y)
-                .attr('stroke', d => d.color)
+                .attr('y2', BAND_Y_TOP + BAND_HEIGHT)
+                .attr('stroke', d => {
+                    const status = d.status || 200;
+                    if (status >= 500) return '#e74c3c'; // Red
+                    if (status >= 400) return '#f1c40f'; // Yellow
+                    return '#2ecc71'; // Green
+                })
                 .attr('stroke-width', 1)
-                .attr('opacity', 0.6);
+                .attr('stroke-opacity', 0.6);
+
+            // --- 3. Render Top-3 Colored Dots ---
+            const top3Requests = this._getTop3Requests();
+            const colorMap = { 0: '#e74c3c', 1: '#f1c40f', 2: '#2ecc71' }; // Red, Yellow, Green
 
             extGroup.selectAll('.acc-dot')
                 .data(this._events)
@@ -210,9 +261,17 @@
                 .append('circle')
                 .attr('class', 'acc-dot')
                 .attr('cx', d => x(d.timestamp))
-                .attr('cy', BAND_Y_TOP)
+                .attr('cy', 5) // Fixed Y for now
                 .attr('r', DOT_RADIUS)
-                .attr('fill', d => d.color)
+                .attr('fill', d => {
+                    const methodUrl = `${d.method} ${d.url}`;
+                    const rank = top3Requests.indexOf(methodUrl);
+                    return rank !== -1 ? colorMap[rank] : '#7f8c8d'; // Grey for others
+                })
+                .style('opacity', d => {
+                    const methodUrl = `${d.method} ${d.url}`;
+                    return top3Requests.indexOf(methodUrl) !== -1 ? 1 : 0.1; // Dim non-top-3
+                })
                 .on("mouseover", function (event, d) {
                     const sizeKB = (d.size / 1024).toFixed(1);
                     const bpsStr = d.Bps > 1024 * 1024 ? (d.Bps / (1024 * 1024)).toFixed(2) + " MB/s" : (d.Bps / 1024).toFixed(1) + " KB/s";
@@ -234,31 +293,53 @@
                 .on("mouseout", function () {
                     d3.select("#tooltip").style("opacity", 0);
                 });
+
+            // Do NOT store this._extGroup anymore to avoid stale references.
+            // onZoom will find it dynamically.
         },
 
-        onZoom({ x }) {
-            // Update positions based on new X scale
-            d3.selectAll('.acc-bar')
+        _getTop3Requests() {
+            const counts = {};
+            this._events.forEach(e => {
+                const key = `${e.method} ${e.url}`;
+                counts[key] = (counts[key] || 0) + 1;
+            });
+            return Object.entries(counts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(entry => entry[0]);
+        },
+
+        onZoom(event) {
+            const { x } = event;
+            // Dynamic selection to avoid stale references
+            const extGroup = d3.select('.ext-access-log');
+            if (extGroup.empty()) return;
+
+            // Updated Scale for Rates? No, Y scale is fixed height, X changes.
+
+            // Re-render Elements
+            extGroup.selectAll('.acc-bar')
                 .attr('x1', d => x(d.timestamp))
                 .attr('x2', d => x(d.timestamp));
 
-            d3.selectAll('.acc-dot')
+            extGroup.selectAll('.acc-dot')
                 .attr('cx', d => x(d.timestamp));
 
-            // Update All Rate Areas
-            const config = window.GCGraphConfig ? window.GCGraphConfig.accessLog : { metrics: ['rps'] };
+            // Re-render Rate Areas
+            const config = window.GCGraphConfig ? window.GCGraphConfig.accessLog : { metrics: ['rps'], colors: {} };
             const metrics = config.metrics || ['rps'];
 
             metrics.forEach(metric => {
-                const yScale = this._yScales && this._yScales[metric];
-                if (yScale) {
+                if (this._yScales && this._yScales[metric]) {
+                    const yScale = this._yScales[metric];
                     const areaGenerator = d3.area()
                         .x(d => x(d.timestamp))
                         .y0(0)
                         .y1(d => yScale(d[metric]))
                         .curve(d3.curveMonotoneX);
 
-                    d3.select(`.acc-rate-${metric}`)
+                    extGroup.select(`.acc-rate-${metric}`)
                         .attr('d', areaGenerator);
                 }
             });
