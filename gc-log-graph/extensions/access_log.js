@@ -148,8 +148,9 @@
             const metrics = config.metrics || ['rps'];
 
             // Visual Constants
-            const BAND_HEIGHT = 30;
-            const DOT_RADIUS = 2;
+            const visuals = config.visuals || { bandHeight: 30, dotRadius: 2 };
+            const BAND_HEIGHT = visuals.bandHeight || 30;
+            const DOT_RADIUS = visuals.dotRadius || 2;
             const BAND_Y_TOP = DOT_RADIUS;
 
             // --- 1. Render Upside-Down Rate Plots ---
@@ -160,7 +161,7 @@
                 .attr('class', 'ext-access-log')
                 .attr('transform', 'translate(0,0)'); // Explicit identity transform
 
-            const RATE_HEIGHT = height * 0.5; // 50% of graph height
+            const RATE_HEIGHT = height * (visuals.rateHeightRatio || 0.5); // Use ratio from config
 
             this._yScales = {};
 
@@ -195,29 +196,35 @@
                 }
             });
 
-            // --- 2. Render Individual Access Bars ---
-            extGroup.selectAll('.acc-bar')
-                .data(this._events)
-                .enter()
-                .append('line')
-                .attr('class', 'acc-bar')
-                .attr('x1', d => x(d.timestamp))
-                .attr('x2', d => x(d.timestamp))
-                .attr('y1', BAND_Y_TOP)
-                .attr('y2', BAND_Y_TOP + BAND_HEIGHT)
-                .attr('stroke', d => {
-                    const status = d.status || 200;
-                    const statusColors = config.colors.status || {};
-                    if (status >= 500) return statusColors.error || '#e74c3c';
-                    if (status >= 400) return statusColors.warning || '#f1c40f';
-                    return statusColors.success || '#2ecc71';
-                })
-                .attr('stroke-width', 1)
-                .attr('stroke-opacity', 0.6);
+            // --- 2. Render Individual Status Bars ---
+            if (config.showStatusBar !== false) {
+                extGroup.selectAll('.acc-bar')
+                    .data(this._events)
+                    .enter()
+                    .append('line')
+                    .attr('class', 'acc-bar')
+                    .attr('x1', d => x(d.timestamp))
+                    .attr('x2', d => x(d.timestamp))
+                    .attr('y1', BAND_Y_TOP)
+                    .attr('y2', BAND_Y_TOP + BAND_HEIGHT)
+                    .attr('stroke', d => {
+                        const status = d.status || 200;
+                        const statusColors = config.colors.status || {};
+                        if (status >= 500) return statusColors.error || '#e74c3c';
+                        if (status >= 400) return statusColors.warning || '#f1c40f';
+                        return statusColors.success || '#2ecc71';
+                    })
+                    .attr('stroke-width', 1)
+                    .attr('stroke-opacity', 0.6);
+            }
 
             // --- 3. Render Top-3 Colored Dots ---
             const top3Requests = this._getTop3Requests();
             const rankColors = config.colors.rank || {};
+
+            // Calculate max response size for highlighting
+            const maxSize = d3.max(this._events, d => d.size) || 0;
+            const highlightThreshold = visuals.highlightThreshold || 0.3;
 
             extGroup.selectAll('.acc-dot')
                 .data(this._events)
@@ -226,7 +233,10 @@
                 .attr('class', 'acc-dot')
                 .attr('cx', d => x(d.timestamp))
                 .attr('cy', 5) // Fixed Y for now
-                .attr('r', DOT_RADIUS)
+                .attr('r', d => {
+                    const threshold = maxSize * highlightThreshold;
+                    return (d.size > threshold && threshold > 0) ? (visuals.highlightDotRadius || 4) : DOT_RADIUS;
+                })
                 .attr('fill', d => {
                     const methodUrl = `${d.method} ${d.url}`;
                     const rank = top3Requests.indexOf(methodUrl);
@@ -250,12 +260,52 @@
 
                     d3.select("#tooltip")
                         .style("opacity", 1)
-                        .html(`<strong>Access</strong><br/>Time: ${d.timestamp.toISOString()}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`)
+                        .html(`<strong>Access</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`)
                         .style("left", (event.pageX + 10) + "px")
                         .style("top", (event.pageY - 10) + "px");
                 })
                 .on("mouseout", function () {
                     d3.select("#tooltip").style("opacity", 0);
+                })
+                .on("click", function (event, d) {
+                    const popup = d3.select("#gc-popup");
+                    const overlay = d3.select("#gc-overlay");
+                    const CONST = window.GCGraphConfig.constants;
+
+                    const sizeStr = window.formatResponseSize(d.size);
+                    const bpsStr = window.formatResponseSize(d.Bps) + "/s";
+
+                    // Human-readable latency
+                    let latencyStr = `${d.latency} μs`;
+                    if (d.latency >= 1000000) {
+                        latencyStr += ` (${(d.latency / 1000000).toFixed(2)} s)`;
+                    } else if (d.latency >= 1000) {
+                        latencyStr += ` (${(d.latency / 1000).toFixed(1)} ms)`;
+                    }
+
+                    const popupContent = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <strong style="font-size: 16px; color: ${d.color};">Access: ${d.method} ${d.url}</strong>
+                            <button id="close-popup" style="background: #444; border: none; color: #fff; padding: 5px 10px; cursor: pointer; border-radius: 4px;">✕</button>
+                        </div>
+                        <div style="margin-bottom: 10px; color: ${CONST.popup.textColor};">
+                            <strong>Time:</strong> ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>
+                            <strong>Status:</strong> ${d.status} | <strong>Size:</strong> ${sizeStr}<br/>
+                            <strong>Latency:</strong> ${latencyStr}<br/>
+                            <strong>Rates:</strong> ${d.rps.toFixed(1)} RPS | ${bpsStr}
+                        </div>
+                        <div style="background: ${CONST.popup.codeBackground}; color: ${CONST.popup.codeColor}; padding: 10px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; font-size: 12px; border: ${CONST.popup.codeBorder};">
+${d.originalLine}
+                        </div>
+                    `;
+
+                    popup.html(popupContent).style("display", "block");
+                    overlay.style("display", "block");
+
+                    document.getElementById('close-popup').onclick = () => {
+                        popup.style("display", "none");
+                        overlay.style("display", "none");
+                    };
                 });
 
             // Do NOT store this._extGroup anymore to avoid stale references.
@@ -280,20 +330,20 @@
             const extGroup = d3.select('.ext-access-log');
             if (extGroup.empty()) return;
 
-            // Updated Scale for Rates? No, Y scale is fixed height, X changes.
+            const config = window.GCGraphConfig ? window.GCGraphConfig.accessLog : { metrics: ['rps'], colors: {} };
+            const metrics = config.metrics || ['rps'];
 
             // Re-render Elements
-            extGroup.selectAll('.acc-bar')
-                .attr('x1', d => x(d.timestamp))
-                .attr('x2', d => x(d.timestamp));
+            if (config.showStatusBar !== false) {
+                extGroup.selectAll('.acc-bar')
+                    .attr('x1', d => x(d.timestamp))
+                    .attr('x2', d => x(d.timestamp));
+            }
 
             extGroup.selectAll('.acc-dot')
                 .attr('cx', d => x(d.timestamp));
 
             // Re-render Rate Areas
-            const config = window.GCGraphConfig ? window.GCGraphConfig.accessLog : { metrics: ['rps'], colors: {} };
-            const metrics = config.metrics || ['rps'];
-
             metrics.forEach(metric => {
                 if (this._yScales && this._yScales[metric]) {
                     const yScale = this._yScales[metric];
