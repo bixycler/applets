@@ -80,12 +80,17 @@ window.GCGraphConfig = {
     },
 
     serviceLog: {
+        windowSize: 30,
+        metrics: ['procRate', 'goodsRate'], // Options: 'procRate' (ms/s), 'goodsRate' (goods/s)
         visuals: {
             dotRadius: 2,
+            rateHeightRatio: 0.5,
         },
         colors: {
             dot: '#9b59b6', // Purple
-            airListSch: '#e74c3c' // Red
+            airListSch: '#e74c3c', // Red
+            procRate: { fill: '#9b59b6', opacity: 0.1 },
+            goodsRate: { fill: '#f1c40f', opacity: 0.2 },
         }
     }
 };

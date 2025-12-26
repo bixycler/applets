@@ -159,6 +159,30 @@
             // Re-sort after distribution
             this._events.sort((a, b) => a.timestamp - b.timestamp);
 
+            // 3. Rate Calculation (Rolling Window)
+            const config = window.GCGraphConfig?.serviceLog || { windowSize: 30 };
+            const WINDOW_SIZE = config.windowSize || 30;
+
+            this._events.forEach((e, i) => {
+                const startIdx = Math.max(0, i - WINDOW_SIZE);
+                const startEvent = this._events[startIdx];
+                const timeSpanSeconds = (e.timestamp - startEvent.timestamp) / 1000;
+
+                if (timeSpanSeconds > 0) {
+                    let procSum = 0;
+                    let goodsSum = 0;
+                    for (let j = startIdx + 1; j <= i; j++) {
+                        procSum += this._events[j].processingTime || 0;
+                        goodsSum += this._events[j].lastGoodsCount || 0;
+                    }
+                    e.procRate = procSum / timeSpanSeconds;
+                    e.goodsRate = goodsSum / timeSpanSeconds;
+                } else {
+                    e.procRate = 0;
+                    e.goodsRate = 0;
+                }
+            });
+
             console.log(`[ServiceLog] Finish parsing. Found ${this._events.length} records.`);
             // Clean up any remaining active calls that didn't have an END
             this._activeCalls.clear();
@@ -192,12 +216,53 @@
             const config = window.GCGraphConfig?.serviceLog || {};
             const airListColor = config.colors?.airListSch || '#e74c3c';
             const defaultColor = config.colors?.dot || '#9b59b6';
+            const metrics = config.metrics || ['procRate', 'goodsRate'];
+            const visuals = config.visuals || { dotRadius: 2, rateHeightRatio: 0.5 };
+            const DOT_RADIUS = visuals.dotRadius || 2;
+            const BAND_Y_TOP = DOT_RADIUS;
+            const RATE_HEIGHT = dims.height * (visuals.rateHeightRatio || 0.5);
 
             chartGroup.select('.ext-service-log').remove();
             const extGroup = chartGroup.append('g').attr('class', 'ext-service-log');
 
             this._cachedDots = null;
+            this._cachedRatePaths = new Map();
+            this._yScales = {};
+
             const self = this;
+
+            // --- 1. Rate Area Plots ---
+            metrics.forEach(metric => {
+                const maxVal = d3.max(this._events, d => d[metric]);
+                if (maxVal > 0) {
+                    const yScale = d3.scaleLinear()
+                        .domain([0, maxVal])
+                        .range([BAND_Y_TOP, BAND_Y_TOP + RATE_HEIGHT]);
+                    this._yScales[metric] = yScale;
+
+                    const areaGenerator = d3.area()
+                        .x(d => x(d.timestamp))
+                        .y0(0)
+                        .y1(d => yScale(d[metric]))
+                        .curve(d3.curveMonotoneX);
+
+                    const metricConfig = (config.colors && config.colors[metric]) || {};
+                    const fill = metricConfig.fill || (metric === 'procRate' ? '#9b59b6' : '#f1c40f');
+                    const opacity = metricConfig.opacity || 0.1;
+
+                    const path = extGroup.append('path')
+                        .datum(this._events)
+                        .attr('class', `svc-rate-area svc-rate-${metric}`)
+                        .attr('d', areaGenerator)
+                        .attr('fill', fill)
+                        .attr('opacity', opacity)
+                        .attr('stroke', 'none');
+
+                    this._cachedRatePaths.set(metric, path);
+                }
+            });
+
+            // --- 2. Tooltip Pre-calculation ---
             this._events.forEach(d => {
                 const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
                 const durStr = self._formatDurationHuman(d.processingTime);
@@ -207,8 +272,14 @@
                     const display = d.lastGoodsCount.toString() !== human ? `${d.lastGoodsCount} (${human})` : d.lastGoodsCount;
                     goodsStr = `<br/>Goods: ${display}`;
                 }
-                d._tooltipHtml = `<strong>Service: ${d.methodName}</strong><br/>Time: ${timeStr}<br/>Processing Time: ${durStr}${goodsStr}`;
+
+                const procRateStr = d.procRate > 0 ? `${d.procRate.toFixed(1)} ms/s` : '0';
+                const goodsRateStr = d.goodsRate > 0 ? `${d.goodsRate.toFixed(1)} goods/s` : '0';
+                const rateStr = `<br/>Rates: ${procRateStr} | ${goodsRateStr}`;
+                d._tooltipHtml = `<strong>Service: ${d.methodName}</strong><br/>Time: ${timeStr}<br/>Processing Time: ${durStr}${goodsStr}${rateStr}`;
             });
+
+            this._cachedDots = null;
 
             extGroup.selectAll('.svc-dot')
                 .data(this._events)
@@ -241,6 +312,9 @@
                     const CONST = window.GCGraphConfig.constants;
                     const color = d.methodName.includes('airListSchSv') ? airListColor : defaultColor;
 
+                    const procRateStr = d.procRate > 0 ? `${d.procRate.toFixed(1)} ms/s` : '0';
+                    const goodsRateStr = d.goodsRate > 0 ? `${d.goodsRate.toFixed(1)} goods/s` : '0';
+
                     // Handle collapsible HknAgtTimes
                     let hknAgtContent = '';
                     if (d.hknAgtTimes && d.hknAgtTimes.length > 0) {
@@ -269,6 +343,7 @@
                             const display = d.lastGoodsCount.toString() !== human ? `${d.lastGoodsCount} (${human})` : d.lastGoodsCount;
                             return `<br/><strong>Last Goods Count:</strong> ${display}`;
                         })() : ''}
+                            <br/><strong>Rates:</strong> ${procRateStr} | ${goodsRateStr}
                             ${d.metrics ? `
                                 <br/><strong>GDS:</strong> ${d.metrics.gds}
                                 <br/><strong>CarrierConnectExecuteTime:</strong> ${self._formatDurationHuman(d.metrics.carrierConnectExecuteTime)}
@@ -315,6 +390,28 @@ ${d.logs.map(line => {
             }
             // Use cached selection to skip expensive DOM lookups
             this._cachedDots.attr('cx', d => x(d.timestamp));
+
+            // Re-render Rate Areas
+            const config = window.GCGraphConfig?.serviceLog || {};
+            const metrics = config.metrics || ['procRate', 'goodsRate'];
+
+            metrics.forEach(metric => {
+                if (this._yScales && this._yScales[metric]) {
+                    const yScale = this._yScales[metric];
+                    const areaGenerator = d3.area()
+                        .x(d => x(d.timestamp))
+                        .y0(0)
+                        .y1(d => yScale(d[metric]))
+                        .curve(d3.curveMonotoneX);
+
+                    const path = this._cachedRatePaths ? this._cachedRatePaths.get(metric) : null;
+                    if (path) {
+                        path.attr('d', areaGenerator);
+                    } else {
+                        d3.select(`.svc-rate-${metric}`).attr('d', areaGenerator);
+                    }
+                }
+            });
         }
     };
 
