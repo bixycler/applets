@@ -772,10 +772,7 @@ function renderChart(data) {
             // Format time with timezone
             const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
 
-            const content = `<strong>GC(${d.id})</strong> at ${timeStr}<br/>
-Action: ${d.action}<br/>
-Memory: ${formatBytes(d.beforeBytes)} -> ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>
-Duration: ${d.duration}ms`;
+            const content = `<strong>GC(${d.id}): ${d.action}</strong><br/>Time: ${timeStr}<br/>Memory: ${formatBytes(d.beforeBytes)} -> ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>Duration: ${d.duration}ms`;
 
             tooltip.html(content)
                 .style("left", (event.pageX + 15) + "px")

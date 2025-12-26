@@ -100,6 +100,17 @@ window.formatResponseSize = function (bytes) {
     return bytes + " B";
 };
 
+// Global helper for count formatting (e.g. 1.2k, 2.5M)
+window.formatCountHuman = function (count) {
+    if (count === null || count === undefined) return '0';
+    if (count >= 1000000) {
+        return (count / 1000000).toFixed(1) + "M";
+    } else if (count >= 1000) {
+        return (count / 1000).toFixed(1) + "k";
+    }
+    return count.toString();
+};
+
 // Global helper for timestamp formatting that respects timezone selection
 window.formatTimestampInTz = function (date, rawStr) {
     const tzSelect = document.getElementById('timezone-select');

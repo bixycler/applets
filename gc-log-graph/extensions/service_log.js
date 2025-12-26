@@ -201,8 +201,13 @@
             this._events.forEach(d => {
                 const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
                 const durStr = self._formatDurationHuman(d.processingTime);
-                const goodsStr = d.lastGoodsCount !== null ? `<br/>Goods: ${d.lastGoodsCount}` : '';
-                d._tooltipHtml = `<strong>Service</strong><br/>Time: ${timeStr}<br/>Method: ${d.methodName}<br/>Processing Time: ${durStr}${goodsStr}`;
+                let goodsStr = '';
+                if (d.lastGoodsCount !== null) {
+                    const human = window.formatCountHuman(d.lastGoodsCount);
+                    const display = d.lastGoodsCount.toString() !== human ? `${d.lastGoodsCount} (${human})` : d.lastGoodsCount;
+                    goodsStr = `<br/>Goods: ${display}`;
+                }
+                d._tooltipHtml = `<strong>Service: ${d.methodName}</strong><br/>Time: ${timeStr}<br/>Processing Time: ${durStr}${goodsStr}`;
             });
 
             extGroup.selectAll('.svc-dot')
@@ -214,8 +219,6 @@
                 .attr('cy', d => self._getDotRadius(d) * 2.5) // Adjust Y based on radius
                 .attr('r', d => self._getDotRadius(d))
                 .attr('fill', d => d.methodName.includes('airListSchSv') ? airListColor : defaultColor)
-                .attr('stroke', '#fff')
-                .attr('stroke-width', 0.5)
                 .style('cursor', 'pointer')
                 .on("mouseover", function (event, d) {
                     const r = self._getDotRadius(d);
@@ -261,7 +264,11 @@
                             <strong>Thread:</strong> ${d.threadId}<br/>
                             <strong>Start Time:</strong> ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>
                             <strong>Processing Time:</strong> ${self._formatDurationHuman(d.processingTime)}
-                            ${d.lastGoodsCount !== null ? `<br/><strong>Last Goods Count:</strong> ${d.lastGoodsCount}` : ''}
+                            ${d.lastGoodsCount !== null ? (() => {
+                            const human = window.formatCountHuman(d.lastGoodsCount);
+                            const display = d.lastGoodsCount.toString() !== human ? `${d.lastGoodsCount} (${human})` : d.lastGoodsCount;
+                            return `<br/><strong>Last Goods Count:</strong> ${display}`;
+                        })() : ''}
                             ${d.metrics ? `
                                 <br/><strong>GDS:</strong> ${d.metrics.gds}
                                 <br/><strong>CarrierConnectExecuteTime:</strong> ${self._formatDurationHuman(d.metrics.carrierConnectExecuteTime)}
@@ -271,13 +278,13 @@
                         </div>
                         <div style="background: ${CONST.popup.codeBackground}; color: ${CONST.popup.codeColor}; padding: 10px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; font-size: 12px; border: ${CONST.popup.codeBorder}; max-height: 50vh; overflow-y: auto;">
 ${d.logs.map(line => {
-                        const m = line.match(ServiceLogExtension._headerRegex);
-                        if (m) {
-                            // Replace full header with time (Group 3)
-                            return `(${m[3]}) ${line.substring(m[0].length)}`;
-                        }
-                        return line;
-                    }).join('\n')}
+                            const m = line.match(ServiceLogExtension._headerRegex);
+                            if (m) {
+                                // Replace full header with time (Group 3)
+                                return `(${m[3]}) ${line.substring(m[0].length)}`;
+                            }
+                            return line;
+                        }).join('\n')}
                         </div>
                     `;
 

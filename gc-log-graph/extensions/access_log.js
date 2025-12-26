@@ -252,7 +252,7 @@
                     latencyStr += ` (${(d.latency / 1000).toFixed(1)} ms)`;
                 }
 
-                d._tooltipHtml = `<strong>Access</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`;
+                d._tooltipHtml = `<strong>Access: ${d.method} ${d.url}</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`;
             });
 
             extGroup.selectAll('.acc-dot')
@@ -261,7 +261,11 @@
                 .append('circle')
                 .attr('class', 'acc-dot')
                 .attr('cx', d => x(d.timestamp))
-                .attr('cy', 5) // Fixed Y for now
+                .attr('cy', d => {
+                    const threshold = maxSize * highlightThreshold;
+                    const r = (d.size > threshold && threshold > 0) ? (visuals.highlightDotRadius || 4) : DOT_RADIUS;
+                    return r * 2.5; // Top-aligned logic like ServiceLog
+                })
                 .attr('r', d => {
                     const threshold = maxSize * highlightThreshold;
                     return (d.size > threshold && threshold > 0) ? (visuals.highlightDotRadius || 4) : DOT_RADIUS;

@@ -57,7 +57,7 @@ header {
     border-radius: 4px;
     pointer-events: none;
     line-height: 1.4;
-    white-space: pre-wrap;
+    white-space: normal;
     z-index: 10;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
     max-width: 400px;
