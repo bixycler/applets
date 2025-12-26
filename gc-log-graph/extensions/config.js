@@ -11,6 +11,7 @@ window.GCGraphConfig = {
             normalGC: '#3498db',      // Light Blue
             heapTotal: '#aaaaaa',        // Grey
             heapUsed: '#d9534f',      // Salmon Red
+            serviceLog: '#9b59b6',    // Purple
         },
         // Marker radii by GC type
         radii: {
@@ -75,6 +76,16 @@ window.GCGraphConfig = {
                 2: '#2ecc71',
                 default: '#7f8c8d' // Grey for others
             }
+        }
+    },
+
+    serviceLog: {
+        visuals: {
+            dotRadius: 2,
+        },
+        colors: {
+            dot: '#9b59b6', // Purple
+            airListSch: '#e74c3c' // Red
         }
     }
 };

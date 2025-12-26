@@ -206,6 +206,10 @@ async function processGCLog(content) {
             detectedTimezone = tzMatch[1];
         }
     }
+    // Expose detected timezone globally for extensions
+    if (window.GCGraphConfig) {
+        window.GCGraphConfig.detectedLogTimezone = detectedTimezone;
+    }
 
     // Assign colors and radii based on GC type
     result.forEach(r => {
@@ -379,6 +383,15 @@ function parseGCLog(lines, startLine, maxEventsToParse, gcMap) {
             if (timeMatch && !record.timestamp) {
                 record.timestampRaw = timeMatch[1]; // Keep original with timezone
                 record.timestamp = new Date(timeMatch[1]);
+
+                // Detect and set global timezone as soon as possible
+                if (window.GCGraphConfig && !window.GCGraphConfig.detectedLogTimezone) {
+                    const tzMatch = timeMatch[1].match(/([+-]\d{4})$/);
+                    if (tzMatch) {
+                        window.GCGraphConfig.detectedLogTimezone = tzMatch[1];
+                        console.log(`[app.js] Early timezone detection: ${tzMatch[1]}`);
+                    }
+                }
             }
 
             // Check for Memory Pattern
