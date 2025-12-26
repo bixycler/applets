@@ -4,6 +4,11 @@
         window.GCGraphExtensions = [];
     }
 
+    // Prevent duplicate registration
+    if (window.GCGraphExtensions.some(e => e.name === 'AccessLog')) {
+        return;
+    }
+
     const AccessLogExtension = {
         name: 'AccessLog',
         _events: [],
@@ -161,6 +166,11 @@
                 .attr('class', 'ext-access-log')
                 .attr('transform', 'translate(0,0)'); // Explicit identity transform
 
+            // Cache for onZoom to avoid expensive re-selections
+            this._cachedBars = null;
+            this._cachedDots = null;
+            this._cachedRatePaths = new Map();
+
             const RATE_HEIGHT = height * (visuals.rateHeightRatio || 0.5); // Use ratio from config
 
             this._yScales = {};
@@ -185,13 +195,15 @@
                         const fill = metricConfig.fill || (metric === 'rps' ? 'steelblue' : 'orange');
                         const opacity = metricConfig.opacity || 0.1;
 
-                        extGroup.append('path')
+                        const path = extGroup.append('path')
                             .datum(this._events)
                             .attr('class', `acc-rate-area acc-rate-${metric}`)
                             .attr('d', areaGenerator)
                             .attr('fill', fill)
                             .attr('opacity', opacity)
                             .attr('stroke', 'none');
+
+                        this._cachedRatePaths.set(metric, path);
                     }
                 }
             });
@@ -216,6 +228,8 @@
                     })
                     .attr('stroke-width', 1)
                     .attr('stroke-opacity', 0.6);
+
+                this._cachedBars = extGroup.selectAll('.acc-bar');
             }
 
             // --- 3. Render Top-3 Colored Dots ---
@@ -225,6 +239,21 @@
             // Calculate max response size for highlighting
             const maxSize = d3.max(this._events, d => d.size) || 0;
             const highlightThreshold = visuals.highlightThreshold || 0.3;
+
+            this._events.forEach(d => {
+                const sizeStr = window.formatResponseSize(d.size);
+                const bpsStr = window.formatResponseSize(d.Bps) + "/s";
+
+                // Human-readable latency
+                let latencyStr = `${d.latency} μs`;
+                if (d.latency >= 1000000) {
+                    latencyStr += ` (${(d.latency / 1000000).toFixed(2)} s)`;
+                } else if (d.latency >= 1000) {
+                    latencyStr += ` (${(d.latency / 1000).toFixed(1)} ms)`;
+                }
+
+                d._tooltipHtml = `<strong>Access</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`;
+            });
 
             extGroup.selectAll('.acc-dot')
                 .data(this._events)
@@ -247,20 +276,9 @@
                     return top3Requests.indexOf(methodUrl) !== -1 ? 1 : 0.1; // Dim non-top-3
                 })
                 .on("mouseover", function (event, d) {
-                    const sizeStr = window.formatResponseSize(d.size);
-                    const bpsStr = window.formatResponseSize(d.Bps) + "/s";
-
-                    // Human-readable latency
-                    let latencyStr = `${d.latency} μs`;
-                    if (d.latency >= 1000000) {
-                        latencyStr += ` (${(d.latency / 1000000).toFixed(2)} s)`;
-                    } else if (d.latency >= 1000) {
-                        latencyStr += ` (${(d.latency / 1000).toFixed(1)} ms)`;
-                    }
-
                     d3.select("#tooltip")
                         .style("opacity", 1)
-                        .html(`<strong>Access</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Request: ${d.method} ${d.url}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`)
+                        .html(d._tooltipHtml)
                         .style("left", (event.pageX + 10) + "px")
                         .style("top", (event.pageY - 10) + "px");
                 })
@@ -302,10 +320,14 @@ ${d.originalLine}
                     popup.html(popupContent).style("display", "block");
                     overlay.style("display", "block");
 
-                    document.getElementById('close-popup').onclick = () => {
-                        popup.style("display", "none");
-                        overlay.style("display", "none");
-                    };
+                    const closeBtn = document.getElementById('close-popup');
+                    if (closeBtn) {
+                        closeBtn.onclick = null;
+                        closeBtn.onclick = () => {
+                            popup.style("display", "none");
+                            overlay.style("display", "none");
+                        };
+                    }
                 });
 
             // Do NOT store this._extGroup anymore to avoid stale references.
@@ -326,22 +348,27 @@ ${d.originalLine}
 
         onZoom(event) {
             const { x } = event;
-            // Dynamic selection to avoid stale references
-            const extGroup = d3.select('.ext-access-log');
-            if (extGroup.empty()) return;
+            if (!this._cachedDots || this._cachedDots.empty()) {
+                // Selection is cached here so it is done only once
+                const extGroup = d3.select('.ext-access-log');
+                if (extGroup.empty()) return;
+                this._cachedBars = extGroup.selectAll('.acc-bar');
+                this._cachedDots = extGroup.selectAll('.acc-dot');
+            }
 
             const config = window.GCGraphConfig ? window.GCGraphConfig.accessLog : { metrics: ['rps'], colors: {} };
             const metrics = config.metrics || ['rps'];
 
-            // Re-render Elements
-            if (config.showStatusBar !== false) {
-                extGroup.selectAll('.acc-bar')
+            // Use cached selections to skip expensive DOM lookups
+            if (this._cachedBars && !this._cachedBars.empty()) {
+                this._cachedBars
                     .attr('x1', d => x(d.timestamp))
                     .attr('x2', d => x(d.timestamp));
             }
 
-            extGroup.selectAll('.acc-dot')
-                .attr('cx', d => x(d.timestamp));
+            if (this._cachedDots && !this._cachedDots.empty()) {
+                this._cachedDots.attr('cx', d => x(d.timestamp));
+            }
 
             // Re-render Rate Areas
             metrics.forEach(metric => {
@@ -353,8 +380,12 @@ ${d.originalLine}
                         .y1(d => yScale(d[metric]))
                         .curve(d3.curveMonotoneX);
 
-                    extGroup.select(`.acc-rate-${metric}`)
-                        .attr('d', areaGenerator);
+                    const path = this._cachedRatePaths.get(metric);
+                    if (path) {
+                        path.attr('d', areaGenerator);
+                    } else {
+                        d3.select(`.acc-rate-${metric}`).attr('d', areaGenerator);
+                    }
                 }
             });
         }

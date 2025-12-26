@@ -4,6 +4,11 @@
         window.GCGraphExtensions = [];
     }
 
+    // Prevent duplicate registration
+    if (window.GCGraphExtensions.some(e => e.name === 'ServiceLog')) {
+        return;
+    }
+
     const ServiceLogExtension = {
         name: 'ServiceLog',
         _events: [],
@@ -191,7 +196,15 @@
             chartGroup.select('.ext-service-log').remove();
             const extGroup = chartGroup.append('g').attr('class', 'ext-service-log');
 
+            this._cachedDots = null;
             const self = this;
+            this._events.forEach(d => {
+                const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
+                const durStr = self._formatDurationHuman(d.processingTime);
+                const goodsStr = d.lastGoodsCount !== null ? `<br/>Goods: ${d.lastGoodsCount}` : '';
+                d._tooltipHtml = `<strong>Service</strong><br/>Time: ${timeStr}<br/>Method: ${d.methodName}<br/>Processing Time: ${durStr}${goodsStr}`;
+            });
+
             extGroup.selectAll('.svc-dot')
                 .data(this._events)
                 .enter()
@@ -207,9 +220,11 @@
                 .on("mouseover", function (event, d) {
                     const r = self._getDotRadius(d);
                     d3.select(this).attr('r', r + 2);
+
+                    // Use pre-calculated tooltip content to keep mouseover fast
                     d3.select("#tooltip")
                         .style("opacity", 1)
-                        .html(`<strong>Service</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Method: ${d.methodName}<br/>Processing Time: ${self._formatDurationHuman(d.processingTime)}${d.lastGoodsCount !== null ? `<br/>Goods: ${d.lastGoodsCount}` : ''}`)
+                        .html(d._tooltipHtml)
                         .style("left", (event.pageX + 10) + "px")
                         .style("top", (event.pageY - 10) + "px");
                 })
@@ -269,18 +284,30 @@ ${d.logs.map(line => {
                     popup.html(popupContent).style("display", "block");
                     overlay.style("display", "block");
 
-                    document.getElementById('close-popup').onclick = () => {
-                        popup.style("display", "none");
-                        overlay.style("display", "none");
-                    };
+                    // Use event delegation or clear previous listeners to avoid memory leak
+                    const closeBtn = document.getElementById('close-popup');
+                    if (closeBtn) {
+                        closeBtn.onclick = null; // Clear potential stale listeners
+                        closeBtn.onclick = () => {
+                            popup.style("display", "none");
+                            overlay.style("display", "none");
+                        };
+                    }
                 });
+
+            this._cachedDots = extGroup.selectAll('.svc-dot');
         },
 
         onZoom(event) {
             const { x } = event;
-            const extGroup = d3.select('.ext-service-log');
-            if (extGroup.empty()) return;
-            extGroup.selectAll('.svc-dot').attr('cx', d => x(d.timestamp));
+            if (!this._cachedDots || this._cachedDots.empty()) {
+                // Selection is cached here so it is done only once
+                const extGroup = d3.select('.ext-service-log');
+                if (extGroup.empty()) return;
+                this._cachedDots = extGroup.selectAll('.svc-dot');
+            }
+            // Use cached selection to skip expensive DOM lookups
+            this._cachedDots.attr('cx', d => x(d.timestamp));
         }
     };
 
