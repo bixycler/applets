@@ -92,6 +92,17 @@ window.GCGraphConfig = {
             procRate: { fill: '#9b59b6', opacity: 0.1 },
             goodsRate: { fill: '#f1c40f', opacity: 0.2 },
         }
+    },
+
+    serviceAccessLog: {
+        yOffset: 'auto', // Calculated as highlightDotRadius * 2.5 + 2
+        accessLog: {
+            metrics: ['Bps'], // Only show Bps rate
+            showStatusBar: false,
+        },
+        serviceLog: {
+            metrics: ['goodsRate'], // Only show goodsRate
+        }
     }
 };
 

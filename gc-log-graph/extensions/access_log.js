@@ -268,7 +268,9 @@
                 })
                 .attr('r', d => {
                     const threshold = maxSize * highlightThreshold;
-                    return (d.size > threshold && threshold > 0) ? (visuals.highlightDotRadius || 4) : DOT_RADIUS;
+                    const r = (d.size > threshold && threshold > 0) ? (visuals.highlightDotRadius || 4) : DOT_RADIUS;
+                    d._baseRadius = r; // Store base radius for hover effect
+                    return r;
                 })
                 .attr('fill', d => {
                     const methodUrl = `${d.method} ${d.url}`;
@@ -280,13 +282,18 @@
                     return top3Requests.indexOf(methodUrl) !== -1 ? 1 : 0.1; // Dim non-top-3
                 })
                 .on("mouseover", function (event, d) {
+                    // Increase radius on hover
+                    d3.select(this).attr('r', d._baseRadius + 2);
+
                     d3.select("#tooltip")
                         .style("opacity", 1)
                         .html(d._tooltipHtml)
                         .style("left", (event.pageX + 10) + "px")
                         .style("top", (event.pageY - 10) + "px");
                 })
-                .on("mouseout", function () {
+                .on("mouseout", function (event, d) {
+                    // Restore original radius
+                    d3.select(this).attr('r', d._baseRadius);
                     d3.select("#tooltip").style("opacity", 0);
                 })
                 .on("click", function (event, d) {
