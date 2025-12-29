@@ -119,7 +119,7 @@
                 // Look back WINDOW_SIZE events
                 const startIdx = Math.max(0, i - WINDOW_SIZE);
                 const startEvent = this._events[startIdx];
-                const timeSpanSeconds = (e.timestamp - startEvent.timestamp) / 1000;
+                const timeSpanSeconds = Math.max(e.timestamp - startEvent.timestamp, e.latency / 1000) / 1000;
 
                 if (timeSpanSeconds > 0) {
                     // If window is full (i >= WINDOW_SIZE), count is WINDOW_SIZE. 
@@ -244,13 +244,8 @@
                 const sizeStr = window.formatResponseSize(d.size);
                 const bpsStr = window.formatResponseSize(d.Bps) + "/s";
 
-                // Human-readable latency
-                let latencyStr = `${d.latency} μs`;
-                if (d.latency >= 1000000) {
-                    latencyStr += ` (${(d.latency / 1000000).toFixed(2)} s)`;
-                } else if (d.latency >= 1000) {
-                    latencyStr += ` (${(d.latency / 1000).toFixed(1)} ms)`;
-                }
+                // Human-readable latency using global helper
+                const latencyStr = window.formatDurationHuman(d.latency, 'μs');
 
                 d._tooltipHtml = `<strong>Access: ${d.method} ${d.url}</strong><br/>Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>Status: ${d.status} | Size: ${sizeStr}<br/>Latency: ${latencyStr}<br/>Rates: ${d.rps.toFixed(1)} RPS | ${bpsStr}`;
             });
@@ -304,13 +299,8 @@
                     const sizeStr = window.formatResponseSize(d.size);
                     const bpsStr = window.formatResponseSize(d.Bps) + "/s";
 
-                    // Human-readable latency
-                    let latencyStr = `${d.latency} μs`;
-                    if (d.latency >= 1000000) {
-                        latencyStr += ` (${(d.latency / 1000000).toFixed(2)} s)`;
-                    } else if (d.latency >= 1000) {
-                        latencyStr += ` (${(d.latency / 1000).toFixed(1)} ms)`;
-                    }
+                    // Human-readable latency using global helper
+                    const latencyStr = window.formatDurationHuman(d.latency, 'μs');
 
                     const popupContent = `
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">

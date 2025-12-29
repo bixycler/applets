@@ -1,5 +1,6 @@
 window.GCGraphConfig = {
     constants: {
+        windowSize: 10, // Number of events in the rolling window for rate calculation
         // GC Type Colors
         colors: {
             fullGC: '#ff0000',        // Bright Red
@@ -49,7 +50,7 @@ window.GCGraphConfig = {
     },
 
     accessLog: {
-        windowSize: 30,
+        windowSize: 30, // Number of events in the rolling window for rate calculation
         showStatusBar: false,
         metrics: ['rps', 'Bps'], // Options: 'rps' = requests per second, 'Bps' = response size rate in bytes per second
         visuals: {
@@ -80,7 +81,7 @@ window.GCGraphConfig = {
     },
 
     serviceLog: {
-        windowSize: 30,
+        windowSize: 30, // Number of events in the rolling window for rate calculation
         metrics: ['procRate', 'goodsRate'], // Options: 'procRate' (ms/s), 'goodsRate' (goods/s)
         visuals: {
             dotRadius: 2,
@@ -125,6 +126,43 @@ window.formatCountHuman = function (count) {
         return (count / 1000).toFixed(1) + "k";
     }
     return count.toString();
+};
+
+// Global helper for duration formatting (microseconds or milliseconds)
+// If input is >= 1000, assumes milliseconds; otherwise assumes microseconds
+window.formatDurationHuman = function (value, unit = 'auto') {
+    let ms;
+
+    // Auto-detect unit based on magnitude
+    if (unit === 'auto') {
+        if (value >= 1000) {
+            ms = value; // Assume milliseconds
+            unit = 'ms';
+        } else {
+            ms = value / 1000; // Assume microseconds
+            unit = 'μs';
+        }
+    } else if (unit === 'μs' || unit === 'us') {
+        ms = value / 1000;
+    } else {
+        ms = value; // Already in milliseconds
+    }
+
+    // Format based on milliseconds
+    if (ms < 1) {
+        return `${Math.round(value)} μs`;
+    } else if (ms < 1000) {
+        return unit === 'μs' ? `${Math.round(value)} μs (${ms.toFixed(1)} ms)` : `${Math.round(ms)} ms`;
+    }
+
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    if (minutes > 0) {
+        return `${Math.round(ms)} ms (${minutes}m ${seconds}s)`;
+    }
+    return `${Math.round(ms)} ms (${seconds}s)`;
 };
 
 // Global helper for timestamp formatting that respects timezone selection

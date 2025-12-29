@@ -250,7 +250,6 @@ async function processGCLog(content) {
         const lastTime = result[result.length - 1].timestamp.getTime();
         const totalTimeMs = lastTime - firstTime;
         const meanIntervalMs = totalTimeMs / result.length;
-        const windowSize = 10;
 
         // Rate unit = GB/s = bytes/ms / Bms2GBs
         const Bms2GBs = (1 << 30) / 1000;
@@ -272,13 +271,14 @@ async function processGCLog(content) {
             let windowAllocated = r.allocatedBytes;
             let windowReclaimed = r.reclaimedBytes;
             let spanStart = r.elapsedMs;
-            for (let j = i - 1; j > Math.max(-1, i - windowSize); j--) {
+            for (let j = i - 1; j > Math.max(-1, i - CONST.windowSize); j--) {
                 windowAllocated += result[j].allocatedBytes;
                 windowReclaimed += result[j].reclaimedBytes;
                 spanStart = result[j].elapsedMs;
             }
-            // Use actual time span if we have enough events, otherwise use total time to avoid artificial spikes
-            let span = i < windowSize ? totalTimeMs : r.elapsedMs - spanStart;
+            // Use actual time span if we have enough events, otherwise use total time or duration to avoid artificial spikes
+            let span = i < CONST.windowSize ? totalTimeMs : r.elapsedMs - spanStart;
+            span = Math.max(span, r.totalDuration);
             r.instantAllocRate = (windowAllocated / span) / Bms2GBs;
             r.instantGcRate = (windowReclaimed / span) / Bms2GBs;
         });
@@ -772,7 +772,7 @@ function renderChart(data) {
             // Format time with timezone
             const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
 
-            const content = `<strong>GC(${d.id}): ${d.action}</strong><br/>Time: ${timeStr}<br/>Memory: ${formatBytes(d.beforeBytes)} -> ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>Duration: ${d.duration}ms`;
+            const content = `<strong>GC(${d.id}): ${d.action}</strong><br/>Time: ${timeStr}<br/>Memory: ${formatBytes(d.beforeBytes)} -> ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>Duration: ${window.formatDurationHuman(d.duration, 'ms')}`;
 
             tooltip.html(content)
                 .style("left", (event.pageX + 15) + "px")
@@ -800,7 +800,7 @@ function renderChart(data) {
                 <div style="margin-bottom: 10px; color: ${CONST.popup.textColor};">
                     Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>
                     Memory: ${formatBytes(d.beforeBytes)} → ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>
-                    Duration: <span style="color: ${d.duration > 100 ? CONST.colors.longPause : CONST.colors.shortPause};">${d.duration}ms</span>
+                    Duration: <span style="color: ${d.duration > 100 ? CONST.colors.longPause : CONST.colors.shortPause};">${window.formatDurationHuman(d.duration, 'ms')}</span>
                 </div>
                 <div style="font-family: monospace; font-size: 11px; white-space: pre-wrap; color: ${CONST.popup.codeColor}; background: ${CONST.popup.codeBackground}; border: ${CONST.popup.codeBorder}; padding: 10px; border-radius: 4px; max-height: 50vh; overflow-y: auto;">${escapeHtml(trimmedLines.join('\n'))}</div>
             `;

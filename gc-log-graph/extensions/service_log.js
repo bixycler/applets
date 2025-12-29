@@ -14,9 +14,8 @@
         _events: [],
         _activeCalls: new Map(), // threadId -> callInfo
 
-        // Example: 2025-11-09T13:39:23.028Z 2025-11-09 22:39:22 [http-nio-8080-exec-258]
-        // or: 2025-11-09 22:39:22 [http-nio-8080-exec-258]
-        _headerRegex: /(?:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{4}))\s+)?(\d{4}-\d{2}-\d{2})\s(\d{2}:\d{2}:\d{2})\s\[([^\]]+)\]/,
+        // Example: 2025-11-09 22:39:22 [http-nio-8080-exec-258]
+        _headerRegex: /(\d{4}-\d{2}-\d{2})\s(\d{2}:\d{2}:\d{2})\s\[([^\]]+)\]/,
         _startRegex: /\[([a-zA-Z0-9_]+)#([a-zA-Z0-9_]+\(\))\]\s+:\s+START/,
         _endRegex: /\[([a-zA-Z0-9_]+)#([a-zA-Z0-9_]+\(\))\]\s+:\s+END.*?Processing\s+time\s+\[([^\]]+)\]\s+ms(?:\s+lastGoodsCount\s+:\s+(\d+))?/,
         _hknRegex: /Total time for getHknAgtInfo: \(ms\) (\d+)/,
@@ -31,9 +30,9 @@
             const headerMatch = line.match(this._headerRegex);
             if (!headerMatch) return false;
 
-            const logDateStr = headerMatch[2];
-            const logTimeStr = headerMatch[3];
-            const threadId = headerMatch[4];
+            const logDateStr = headerMatch[1];
+            const logTimeStr = headerMatch[2];
+            const threadId = headerMatch[3];
             const logTimeFullStr = `${logDateStr} ${logTimeStr}`;
 
             // Rely on Log/Server Time only
@@ -48,28 +47,38 @@
                 const methodName = startMatch[2];
                 // Only track service methods (suffix Sv)
                 if (methodName.includes('Sv')) {
-                    this._activeCalls.set(threadId, {
-                        className,
-                        methodName,
-                        startTime: timestamp,
-                        startTimeRaw: logTimeFullStr,
-                        threadId,
-                        logs: [line],
-                        hknAgtTimes: []
-                    });
+                    // Initialize or update activeCall with start time info
+                    if (!this._activeCalls.has(threadId)) {
+                        this._activeCalls.set(threadId, {
+                            className,
+                            methodName,
+                            startTime: timestamp,
+                            startTimeRaw: logTimeFullStr,
+                            threadId,
+                            logs: [line],
+                            hknAgtTimes: []
+                        });
+                    } else {
+                        // Already tracking this thread - update with start time and method info
+                        const call = this._activeCalls.get(threadId);
+                        call.className = className;
+                        call.methodName = methodName;
+                        call.startTime = timestamp;
+                        call.startTimeRaw = logTimeFullStr;
+                        call.logs.push(line);
+                    }
+                    return true;
                 }
-                return true;
+                // For non-service methods (start), fall through to collect log
             }
 
             const endMatch = line.match(this._endRegex);
             if (endMatch) {
+                const className = endMatch[1];
                 const methodName = endMatch[2];
-                const activeCall = this._activeCalls.get(threadId);
 
-                // Optimization: match by methodName as well to ensure correctness
-                if (activeCall && activeCall.methodName === methodName) {
-                    activeCall.logs.push(line);
-
+                // Only process service methods
+                if (methodName.includes('Sv')) {
                     const procTimeMatch = endMatch[3];
                     let procTime = 0;
                     let metrics = null;
@@ -91,48 +100,92 @@
                         procTime = parseInt(procTimeMatch, 10);
                     }
 
+                    // Initialize activeCall if not exists (no START was encountered)
+                    if (!this._activeCalls.has(threadId)) {
+                        this._activeCalls.set(threadId, {
+                            className,
+                            methodName,
+                            startTime: null,
+                            startTimeRaw: null,
+                            threadId,
+                            logs: [line],
+                            hknAgtTimes: []
+                        });
+                    } else {
+                        const call = this._activeCalls.get(threadId);
+                        // Update className/methodName if they weren't set (no START event)
+                        if (!call.className) call.className = className;
+                        if (!call.methodName) call.methodName = methodName;
+                        call.logs.push(line);
+                    }
+
+                    const activeCall = this._activeCalls.get(threadId);
+
+                    // Create event from accumulated data
                     this._events.push({
-                        timestamp: activeCall.startTime,
-                        timestampRaw: activeCall.startTimeRaw,
+                        timestamp: activeCall.startTime || timestamp, // Use end time if no start time
+                        timestampRaw: activeCall.startTimeRaw, // null if no START
                         endTime: timestamp,
+                        endTimeRaw: logTimeFullStr,
                         className: activeCall.className,
                         methodName: activeCall.methodName,
                         threadId: activeCall.threadId,
                         processingTime: procTime,
                         lastGoodsCount: endMatch[4] ? parseInt(endMatch[4], 10) : null,
                         hknAgtTimes: activeCall.hknAgtTimes,
-                        metrics, // Decoded airListSchSv metrics
+                        metrics,
                         logs: activeCall.logs
                     });
                     this._activeCalls.delete(threadId);
+                    return true;
                 }
+            }
+
+            // Collect log lines - initialize activeCall if needed
+            // We collect ALL logs for any threadId, but only create events for service END
+            if (!this._activeCalls.has(threadId)) {
+                // Initialize tracking for this thread (we don't know className/methodName yet)
+                this._activeCalls.set(threadId, {
+                    className: null,
+                    methodName: null,
+                    startTime: null,
+                    startTimeRaw: null,
+                    threadId,
+                    logs: [line],
+                    hknAgtTimes: []
+                });
                 return true;
             }
 
-            // Collect intermediate log lines for active calls in this thread
-            if (this._activeCalls.has(threadId)) {
-                const call = this._activeCalls.get(threadId);
-                const hknMatch = line.match(this._hknRegex);
-                if (hknMatch) {
-                    call.hknAgtTimes.push(parseInt(hknMatch[1], 10));
-                } else {
-                    call.logs.push(line);
-                }
-                return true;
+            const call = this._activeCalls.get(threadId);
+            const hknMatch = line.match(this._hknRegex);
+            if (hknMatch) {
+                call.hknAgtTimes.push(parseInt(hknMatch[1], 10));
+            } else {
+                call.logs.push(line);
             }
-
-            return false;
+            return true;
         },
 
         finish() {
             // 1. Re-align timestamps using final detected global offset
             const offset = window.GCGraphConfig?.detectedLogTimezone || '';
             this._events.forEach(e => {
-                // e.timestampRaw is "YYYY-MM-DD HH:mm:ss"
-                const dateInput = e.timestampRaw.replace(' ', 'T') + offset;
-                const newTs = new Date(dateInput);
-                if (!isNaN(newTs.getTime())) {
-                    e.timestamp = newTs;
+                // For events with START time, use timestampRaw
+                // For events with only END time (no START), use endTimeRaw
+                const rawTimeStr = e.timestampRaw || e.endTimeRaw;
+                if (rawTimeStr) {
+                    const dateInput = rawTimeStr.replace(' ', 'T') + offset;
+                    const newTs = new Date(dateInput);
+                    if (!isNaN(newTs.getTime())) {
+                        if (e.timestampRaw) {
+                            e.timestamp = newTs;
+                        } else {
+                            // No START time - update both timestamp and endTime
+                            e.timestamp = newTs;
+                            e.endTime = newTs;
+                        }
+                    }
                 }
             });
 
@@ -166,7 +219,7 @@
             this._events.forEach((e, i) => {
                 const startIdx = Math.max(0, i - WINDOW_SIZE);
                 const startEvent = this._events[startIdx];
-                const timeSpanSeconds = (e.timestamp - startEvent.timestamp) / 1000;
+                const timeSpanSeconds = Math.max(e.timestamp - startEvent.timestamp, e.processingTime) / 1000;
 
                 if (timeSpanSeconds > 0) {
                     let procSum = 0;
@@ -195,17 +248,6 @@
             if (time >= 10000) return 4;
             if (time >= 1000) return 3;
             return 2;
-        },
-
-        _formatDurationHuman(ms) {
-            if (ms < 1000) return `${ms} ms`;
-            const totalSeconds = Math.floor(ms / 1000);
-            const minutes = Math.floor(totalSeconds / 60);
-            const seconds = totalSeconds % 60;
-            if (minutes > 0) {
-                return `${ms} ms (${minutes}m ${seconds}s)`;
-            }
-            return `${ms} ms (${seconds}s)`;
         },
 
         render(chartGroup, scales, dims) {
@@ -264,8 +306,9 @@
 
             // --- 2. Tooltip Pre-calculation ---
             this._events.forEach(d => {
-                const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
-                const durStr = self._formatDurationHuman(d.processingTime);
+                const timeLabel = d.timestampRaw ? 'Start Time' : 'End Time';
+                const timeStr = window.formatTimestampInTz(d.timestampRaw ? d.timestamp : d.endTime, d.timestampRaw || d.endTimeRaw);
+                const durStr = window.formatDurationHuman(d.processingTime, 'ms');
                 let goodsStr = '';
                 if (d.lastGoodsCount !== null) {
                     const human = window.formatCountHuman(d.lastGoodsCount);
@@ -276,7 +319,7 @@
                 const procRateStr = d.procRate > 0 ? `${d.procRate.toFixed(1)} ms/s` : '0';
                 const goodsRateStr = d.goodsRate > 0 ? `${d.goodsRate.toFixed(1)} goods/s` : '0';
                 const rateStr = `<br/>Rates: ${procRateStr} | ${goodsRateStr}`;
-                d._tooltipHtml = `<strong>Service: ${d.methodName}</strong><br/>Time: ${timeStr}<br/>Processing Time: ${durStr}${goodsStr}${rateStr}`;
+                d._tooltipHtml = `<strong>Service: ${d.methodName}</strong><br/>${timeLabel}: ${timeStr}<br/>Processing Time: ${durStr}${goodsStr}${rateStr}`;
             });
 
             this._cachedDots = null;
@@ -336,8 +379,8 @@
                         <div style="margin-bottom: 10px; color: ${CONST.popup.textColor};">
                             <strong>Class:</strong> ${d.className}<br/>
                             <strong>Thread:</strong> ${d.threadId}<br/>
-                            <strong>Start Time:</strong> ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>
-                            <strong>Processing Time:</strong> ${self._formatDurationHuman(d.processingTime)}
+                            <strong>${d.timestampRaw ? 'Start Time' : 'End Time'}:</strong> ${window.formatTimestampInTz(d.timestampRaw ? d.timestamp : d.endTime, d.timestampRaw || d.endTimeRaw)}<br/>
+                            <strong>Processing Time:</strong> ${window.formatDurationHuman(d.processingTime, 'ms')}
                             ${d.lastGoodsCount !== null ? (() => {
                             const human = window.formatCountHuman(d.lastGoodsCount);
                             const display = d.lastGoodsCount.toString() !== human ? `${d.lastGoodsCount} (${human})` : d.lastGoodsCount;
@@ -346,21 +389,20 @@
                             <br/><strong>Rates:</strong> ${procRateStr} | ${goodsRateStr}
                             ${d.metrics ? `
                                 <br/><strong>GDS:</strong> ${d.metrics.gds}
-                                <br/><strong>CarrierConnectExecuteTime:</strong> ${self._formatDurationHuman(d.metrics.carrierConnectExecuteTime)}
-                                <br/><strong>HknAgtTime:</strong> ${self._formatDurationHuman(d.metrics.hknAgtTime)}
+                                <br/><strong>CarrierConnectExecuteTime:</strong> ${window.formatDurationHuman(d.metrics.carrierConnectExecuteTime, 'ms')}
+                                <br/><strong>HknAgtTime:</strong> ${window.formatDurationHuman(d.metrics.hknAgtTime, 'ms')}
                             ` : ''}
                             ${hknAgtContent}
                         </div>
-                        <div style="background: ${CONST.popup.codeBackground}; color: ${CONST.popup.codeColor}; padding: 10px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; font-size: 12px; border: ${CONST.popup.codeBorder}; max-height: 50vh; overflow-y: auto;">
-${d.logs.map(line => {
+                        <div style="background: ${CONST.popup.codeBackground}; color: ${CONST.popup.codeColor}; padding: 10px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; font-size: 12px; border: ${CONST.popup.codeBorder}; max-height: 50vh; overflow-y: auto;"
+                        >${d.logs.map(line => {
                             const m = line.match(ServiceLogExtension._headerRegex);
                             if (m) {
-                                // Replace full header with time (Group 3)
-                                return `(${m[3]}) ${line.substring(m[0].length)}`;
+                                // Replace full header with time (Group 2)
+                                return `(${m[2]}) ${line.substring(m.index + m[0].length)}`;
                             }
                             return line;
-                        }).join('\n')}
-                        </div>
+                        }).join('\n')}</div>
                     `;
 
                     popup.html(popupContent).style("display", "block");
