@@ -206,6 +206,10 @@ async function processGCLog(content) {
             detectedTimezone = tzMatch[1];
         }
     }
+    // Expose detected timezone globally for extensions
+    if (window.GCGraphConfig) {
+        window.GCGraphConfig.detectedLogTimezone = detectedTimezone;
+    }
 
     // Assign colors and radii based on GC type
     result.forEach(r => {
@@ -246,7 +250,6 @@ async function processGCLog(content) {
         const lastTime = result[result.length - 1].timestamp.getTime();
         const totalTimeMs = lastTime - firstTime;
         const meanIntervalMs = totalTimeMs / result.length;
-        const windowSize = 10;
 
         // Rate unit = GB/s = bytes/ms / Bms2GBs
         const Bms2GBs = (1 << 30) / 1000;
@@ -268,13 +271,14 @@ async function processGCLog(content) {
             let windowAllocated = r.allocatedBytes;
             let windowReclaimed = r.reclaimedBytes;
             let spanStart = r.elapsedMs;
-            for (let j = i - 1; j > Math.max(-1, i - windowSize); j--) {
+            for (let j = i - 1; j > Math.max(-1, i - CONST.windowSize); j--) {
                 windowAllocated += result[j].allocatedBytes;
                 windowReclaimed += result[j].reclaimedBytes;
                 spanStart = result[j].elapsedMs;
             }
-            // Use actual time span if we have enough events, otherwise use total time to avoid artificial spikes
-            let span = i < windowSize ? totalTimeMs : r.elapsedMs - spanStart;
+            // Use actual time span if we have enough events, otherwise use total time or duration to avoid artificial spikes
+            let span = i < CONST.windowSize ? totalTimeMs : r.elapsedMs - spanStart;
+            span = Math.max(span, r.totalDuration);
             r.instantAllocRate = (windowAllocated / span) / Bms2GBs;
             r.instantGcRate = (windowReclaimed / span) / Bms2GBs;
         });
@@ -379,6 +383,15 @@ function parseGCLog(lines, startLine, maxEventsToParse, gcMap) {
             if (timeMatch && !record.timestamp) {
                 record.timestampRaw = timeMatch[1]; // Keep original with timezone
                 record.timestamp = new Date(timeMatch[1]);
+
+                // Detect and set global timezone as soon as possible
+                if (window.GCGraphConfig && !window.GCGraphConfig.detectedLogTimezone) {
+                    const tzMatch = timeMatch[1].match(/([+-]\d{4})$/);
+                    if (tzMatch) {
+                        window.GCGraphConfig.detectedLogTimezone = tzMatch[1];
+                        console.log(`[app.js] Early timezone detection: ${tzMatch[1]}`);
+                    }
+                }
             }
 
             // Check for Memory Pattern
@@ -710,15 +723,15 @@ function renderChart(data) {
             .style("top", "50%")
             .style("left", "50%")
             .style("transform", "translate(-50%, -50%)")
-            .style("background", "#1e1e1e")
-            .style("border", "2px solid #444")
-            .style("border-radius", "8px")
-            .style("padding", "15px")
-            .style("max-width", "80vw")
-            .style("max-height", "80vh")
+            .style("background", CONST.popup.background)
+            .style("border", CONST.popup.border)
+            .style("border-radius", CONST.popup.borderRadius)
+            .style("padding", CONST.popup.padding)
+            .style("max-width", CONST.popup.maxWidth)
+            .style("max-height", CONST.popup.maxHeight)
             .style("overflow", "auto")
-            .style("z-index", "1000")
-            .style("box-shadow", "0 4px 20px rgba(0,0,0,0.5)");
+            .style("z-index", CONST.popup.zIndex)
+            .style("box-shadow", CONST.popup.boxShadow);
     }
 
     // Overlay to close popup
@@ -757,21 +770,9 @@ function renderChart(data) {
             tooltip.transition().duration(200).style("opacity", .9);
 
             // Format time with timezone
-            let timeStr;
-            if (tzOffset && d.timestampRaw) {
-                // Show in log timezone format
-                timeStr = d.timestampRaw.replace('T', ' ');
-            } else if (d.timestampRaw) {
-                // Show raw timestamp
-                timeStr = d.timestampRaw.replace('T', ' ');
-            } else {
-                timeStr = d.timestamp.toISOString();
-            }
+            const timeStr = window.formatTimestampInTz(d.timestamp, d.timestampRaw);
 
-            const content = `<strong>GC(${d.id})</strong> at ${timeStr}<br/>
-Action: ${d.action}<br/>
-Memory: ${formatBytes(d.beforeBytes)} -> ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>
-Duration: ${d.duration}ms`;
+            const content = `<strong>GC(${d.id}): ${d.action}</strong><br/>Time: ${timeStr}<br/>Memory: ${formatBytes(d.beforeBytes)} -> ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>Duration: ${window.formatDurationHuman(d.duration, 'ms')}`;
 
             tooltip.html(content)
                 .style("left", (event.pageX + 15) + "px")
@@ -796,15 +797,15 @@ Duration: ${d.duration}ms`;
                     <strong style="font-size: 16px; color: ${d.color};">GC(${d.id}) - ${d.action}</strong>
                     <button id="close-popup" style="background: #444; border: none; color: #fff; padding: 5px 10px; cursor: pointer; border-radius: 4px;">✕</button>
                 </div>
-                <div style="margin-bottom: 10px; color: #000;">
-                    Time: ${d.timestampRaw ? d.timestampRaw.replace('T', ' ') : d.timestamp.toISOString()}<br/>
+                <div style="margin-bottom: 10px; color: ${CONST.popup.textColor};">
+                    Time: ${window.formatTimestampInTz(d.timestamp, d.timestampRaw)}<br/>
                     Memory: ${formatBytes(d.beforeBytes)} → ${formatBytes(d.afterBytes)} / ${formatBytes(d.totalBytes)}<br/>
-                    Duration: <span style="color: ${d.duration > 100 ? CONST.colors.longPause : CONST.colors.shortPause};">${d.duration}ms</span>
+                    Duration: <span style="color: ${d.duration > 100 ? CONST.colors.longPause : CONST.colors.shortPause};">${window.formatDurationHuman(d.duration, 'ms')}</span>
                 </div>
-                <div style="font-family: monospace; font-size: 11px; white-space: pre-wrap; color: #000; background: #eee; padding: 10px; border-radius: 4px; max-height: 50vh; overflow-y: auto;">${escapeHtml(trimmedLines.join('\n'))}</div>
+                <div style="font-family: monospace; font-size: 11px; white-space: pre-wrap; color: ${CONST.popup.codeColor}; background: ${CONST.popup.codeBackground}; border: ${CONST.popup.codeBorder}; padding: 10px; border-radius: 4px; max-height: 50vh; overflow-y: auto;">${escapeHtml(trimmedLines.join('\n'))}</div>
             `;
 
-            popup.html(popupContent).style("display", "block").style("background", "#fff");
+            popup.html(popupContent).style("display", "block");
             overlay.style("display", "block");
 
             // Attach close handler
